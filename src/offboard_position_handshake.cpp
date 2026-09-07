@@ -8,8 +8,10 @@ using px4_msgs::msg::VehicleCommand;
 using px4_msgs::msg::VehicleCommandAck;
 using px4_msgs::msg::VehicleStatus;
 
-OffboardPositionHandshake::OffboardPositionHandshake()
-: Node("offboard_position_handshake")
+OffboardPositionHandshake::OffboardPositionHandshake(float default_hold_seconds)
+: Node("offboard_position_handshake"),
+  active_cycles_(static_cast<uint64_t>(
+      declare_parameter<double>("hold_seconds", default_hold_seconds) * kLoopRateHz))
 {
   // Ver comentario equivalente en offboard_control.cpp: solo vehicle_status
   // lleva sufijo de version en este nodo (los demas topics que usa tienen
@@ -48,8 +50,9 @@ OffboardPositionHandshake::OffboardPositionHandshake()
   RCLCPP_WARN(
     get_logger(),
     "offboard_position_handshake iniciado a %.0f Hz. Modo POSICION, hold fijo en el origen, "
-    "NUNCA comanda despegue. Pensado para correr sin helices.",
-    kLoopRateHz);
+    "NUNCA comanda despegue. Hold armado: %.0f s (parametro hold_seconds). Si el kill switch "
+    "del RC se activa durante el hold, se detecta como desarme externo y el test termina ahi.",
+    kLoopRateHz, active_cycles_ / kLoopRateHz);
 }
 
 void OffboardPositionHandshake::onTimer()
@@ -115,19 +118,30 @@ void OffboardPositionHandshake::onTimer()
       }
 
     case State::kActive: {
+        if (external_disarm_detected_) {
+          RCLCPP_WARN(
+            get_logger(),
+            "*** KILL SWITCH OK: desarme externo detectado (no fue este nodo) mientras estaba "
+            "en OFFBOARD armado. El kill switch del RC tiene prioridad sobre OFFBOARD. ***");
+          state_ = State::kFinished;
+          break;
+        }
+
         publishOffboardControlMode();
         publishTrajectorySetpoint();
         if (cycle_count_ == 1) {
           RCLCPP_INFO(
             get_logger(),
-            "ARMADO en OFFBOARD (posicion, hold fijo, sin despegue). Desarmando en %.0f s...",
-            kActiveCycles / kLoopRateHz);
+            "ARMADO en OFFBOARD (posicion, hold fijo, sin despegue). Ventana de %.0f s para "
+            "probar el kill switch del RC; si no se activa, este nodo desarma solo al final.",
+            active_cycles_ / kLoopRateHz);
         }
-        if (cycle_count_ >= kActiveCycles) {
+        if (cycle_count_ >= active_cycles_) {
           publishVehicleCommand(
             VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
             VehicleCommand::ARMING_ACTION_DISARM);
-          RCLCPP_INFO(get_logger(), "Solicitando DESARME...");
+          RCLCPP_INFO(
+            get_logger(), "Ventana terminada sin desarme externo. Solicitando DESARME normal...");
           state_ = State::kDisarm;
           cycle_count_ = 0;
         }
@@ -242,6 +256,16 @@ void OffboardPositionHandshake::vehicleStatusCallback(const VehicleStatus::Share
     msg->arming_state != VehicleStatus::ARMING_STATE_ARMED)
   {
     disarm_confirmed_ = true;
+  }
+
+  // En kActive este nodo nunca pide un desarme por su cuenta (eso solo pasa
+  // al salir de este estado, ver onTimer) -- asi que cualquier transicion a
+  // desarmado mientras estamos aca solo puede venir de afuera: el kill
+  // switch del RC (u otra intervencion externa, ej. QGC).
+  if (state_ == State::kActive && !external_disarm_detected_ &&
+    msg->arming_state != VehicleStatus::ARMING_STATE_ARMED)
+  {
+    external_disarm_detected_ = true;
   }
 }
 

@@ -12,6 +12,15 @@ def generate_launch_description():
             'para firmware v1.14 (FC actual). "_v1" para firmware v1.17 (HKUST_NXT_DUAL).'
         ),
     )
+    hold_seconds_arg = DeclareLaunchArgument(
+        'hold_seconds', default_value='5.0',
+        description=(
+            'Segundos armado en OFFBOARD antes de que el nodo pida el desarme por su cuenta. '
+            'Subir este valor para tener mas tiempo de activar el kill switch del RC a mano -- '
+            'si el kill switch desarma antes de que se cumpla este tiempo, el nodo lo detecta '
+            'como desarme externo y termina el test ahi mismo (no espera el resto de la ventana).'
+        ),
+    )
 
     micro_xrce_agent = ExecuteProcess(
         cmd=['MicroXRCEAgent', 'serial', '--dev', '/dev/ttyAMA0', '-b', '921600'],
@@ -26,11 +35,13 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'topic_version_suffix': LaunchConfiguration('topic_version_suffix'),
+            'hold_seconds': LaunchConfiguration('hold_seconds'),
         }],
     )
 
     return LaunchDescription([
         topic_version_suffix_arg,
+        hold_seconds_arg,
         micro_xrce_agent,
         offboard_position_handshake,
     ])

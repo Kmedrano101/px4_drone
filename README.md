@@ -47,18 +47,27 @@ firmware versions** (v1.14 and v1.17) without touching C++ code.
 
 ## Installation
 
-Inside a ROS 2 Jazzy workspace, alongside [`px4_msgs`](https://github.com/PX4/px4_msgs)
-and a built [`MicroXRCEAgent`](https://github.com/eProsima/Micro-XRCE-DDS-Agent)
-(see [Project Resources](#project-resources) for the exact versions/flags
-that actually interoperate with ROS 2 Jazzy):
+`px4_msgs` is vendored as a **git submodule pinned to the exact commit this
+package was built against** (`px4_msgs/`, currently the v1.14 firmware
+commit — see [Usage](#usage) to switch FCs). Clone with
+`--recurse-submodules`, and symlink it up to the workspace `src/` level so
+`colcon` (which doesn't recurse into an already-found package) discovers it
+alongside `px4_drone`:
 
 ```bash
 cd ~/drone_ws/src
-git clone https://github.com/Kmedrano101/px4_drone.git
+git clone --recurse-submodules https://github.com/Kmedrano101/px4_drone.git
+ln -s px4_drone/px4_msgs px4_msgs
+
 cd ~/drone_ws
 colcon build --packages-select px4_msgs px4_drone --symlink-install
 source install/setup.bash
 ```
+
+Also needs a built [`MicroXRCEAgent`](https://github.com/eProsima/Micro-XRCE-DDS-Agent)
+on the Raspberry Pi (see [Project Resources](#project-resources) for the
+exact version/flags that actually interoperate with ROS 2 Jazzy — the
+default `main` build does **not**).
 
 ## Usage
 

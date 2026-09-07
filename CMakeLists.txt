@@ -28,6 +28,13 @@ target_include_directories(offboard_control PUBLIC
 ament_target_dependencies(offboard_control rclcpp px4_msgs)
 install(TARGETS offboard_control DESTINATION lib/${PROJECT_NAME})
 
+add_executable(offboard_position_handshake src/offboard_position_handshake.cpp)
+target_include_directories(offboard_position_handshake PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(offboard_position_handshake rclcpp px4_msgs)
+install(TARGETS offboard_position_handshake DESTINATION lib/${PROJECT_NAME})
+
 # takeoff_position_hold_outdoor y takeoff_position_hold_indoor comparten toda
 # la logica de despegue/hold/aterrizaje via takeoff_position_hold_base.cpp;
 # solo difieren en que fuente de posicion exigen antes de despegar.

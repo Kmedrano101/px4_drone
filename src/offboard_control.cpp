@@ -210,15 +210,21 @@ void OffboardControl::vehicleStatusCallback(const px4_msgs::msg::VehicleStatus::
         navStateToString(msg->nav_state).c_str());
     }
 
-    if (state_ == State::kArm && !offboard_confirmed_ &&
-      msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
-    {
-      offboard_confirmed_ = true;
-      RCLCPP_INFO(get_logger(), "OFFBOARD confirmado por el FC, esperando %.1f s antes de armar...",
-        kArmDelayCycles / kLoopRateHz);
-    }
-
     last_nav_state_ = msg->nav_state;
+  }
+
+  // Chequeo fuera del "if cambio" de arriba: el FC puede ya estar en
+  // OFFBOARD (p.ej. quedo asi de una corrida anterior, o el switch del RC
+  // ya estaba puesto) antes de que este nodo pida el cambio de modo. En ese
+  // caso nav_state nunca "cambia" tras la solicitud y la confirmacion no se
+  // disparaba nunca (bug encontrado en hardware). Se evalua en cada mensaje
+  // mientras estamos en kArm, no solo en la transicion.
+  if (state_ == State::kArm && !offboard_confirmed_ &&
+    msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
+  {
+    offboard_confirmed_ = true;
+    RCLCPP_INFO(get_logger(), "OFFBOARD confirmado por el FC, esperando %.1f s antes de armar...",
+      kArmDelayCycles / kLoopRateHz);
   }
 
   if (msg->arming_state != last_arming_state_) {

@@ -313,16 +313,21 @@ void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedP
       get_logger(), "nav_state: %s -> %s",
       navStateToString(last_nav_state_).c_str(), navStateToString(msg->nav_state).c_str());
 
-    if (state_ == State::kArm && !offboard_confirmed_ &&
-      msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
-    {
-      offboard_confirmed_ = true;
-      RCLCPP_INFO(
-        get_logger(), "OFFBOARD confirmado por el FC, esperando %.1f s antes de armar...",
-        kArmDelayCycles / kLoopRateHz);
-    }
-
     last_nav_state_ = msg->nav_state;
+  }
+
+  // Ver comentario equivalente en offboard_control.cpp: el FC puede ya estar
+  // en OFFBOARD antes de que este nodo lo pida (corrida previa, switch del
+  // RC ya puesto), y en ese caso nav_state nunca "cambia" tras la
+  // solicitud -- se evalua en cada mensaje mientras estamos en kArm, no
+  // solo en la transicion.
+  if (state_ == State::kArm && !offboard_confirmed_ &&
+    msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
+  {
+    offboard_confirmed_ = true;
+    RCLCPP_INFO(
+      get_logger(), "OFFBOARD confirmado por el FC, esperando %.1f s antes de armar...",
+      kArmDelayCycles / kLoopRateHz);
   }
 
   if (msg->arming_state != last_arming_state_) {

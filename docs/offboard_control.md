@@ -406,6 +406,13 @@ duplicar nodos ni mantener dos ramas de código C++, esto se resolvió con
 
 ### 11.1 Branches de `px4_msgs`
 
+> `px4_msgs` es un **submodule de git** de este repo (`px4_drone/px4_msgs`,
+> pineado al commit v1.14 actual), no un clon aparte. `colcon` no recorre
+> dentro de un paquete ya encontrado, así que hace falta un symlink a nivel
+> `src/` del workspace (`ln -s px4_drone/px4_msgs src/px4_msgs`, ver
+> Installation en el README) para que lo descubra como paquete hermano.
+> Los comandos de abajo funcionan igual gracias a ese symlink.
+
 ```
 cd ~/drone_ws/src/px4_msgs
 git branch -a | grep fc-

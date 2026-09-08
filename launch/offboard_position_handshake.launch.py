@@ -1,4 +1,5 @@
 from launch import LaunchDescription
+from launch.conditions import IfCondition
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -6,7 +7,7 @@ from launch_ros.actions import Node
 
 def generate_launch_description():
     topic_version_suffix_arg = DeclareLaunchArgument(
-        'topic_version_suffix', default_value='',
+        'topic_version_suffix', default_value='_v1',
         description=(
             'Sufijo de version de mensaje para vehicle_status. "" (vacio, default) '
             'para firmware v1.14 (FC actual). "_v1" para firmware v1.17 (HKUST_NXT_DUAL).'
@@ -21,11 +22,22 @@ def generate_launch_description():
             'como desarme externo y termina el test ahi mismo (no espera el resto de la ventana).'
         ),
     )
+    run_agent_arg = DeclareLaunchArgument(
+        'run_agent', default_value='true',
+        description=(
+            'Arrancar el MicroXRCEAgent aqui. Ponlo a false si ya lo levanto '
+            'sitl.launch.py, o dos agentes pelearan por el puerto 8888.'
+        ),
+    )
+
 
     micro_xrce_agent = ExecuteProcess(
-        cmd=['MicroXRCEAgent', 'serial', '--dev', '/dev/ttyAMA0', '-b', '921600'],
+        # SITL: el cliente uXRCE-DDS de PX4 sale por UDP al 8888, no por serie.
+        # En el dron real seria: serial --dev /dev/ttyAMA0 -b 921600
+        cmd=['MicroXRCEAgent', 'udp4', '-p', '8888'],
         name='micro_xrce_agent',
         output='screen',
+        condition=IfCondition(LaunchConfiguration('run_agent')),
     )
 
     offboard_position_handshake = Node(
@@ -42,6 +54,7 @@ def generate_launch_description():
     return LaunchDescription([
         topic_version_suffix_arg,
         hold_seconds_arg,
+        run_agent_arg,
         micro_xrce_agent,
         offboard_position_handshake,
     ])

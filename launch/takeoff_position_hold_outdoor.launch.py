@@ -1,4 +1,5 @@
 from launch import LaunchDescription
+from launch.conditions import IfCondition
 from launch.actions import DeclareLaunchArgument, ExecuteProcess
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -18,20 +19,32 @@ def generate_launch_description():
         description='Segundos a mantener posicion antes de aterrizar.',
     )
     topic_version_suffix_arg = DeclareLaunchArgument(
-        'topic_version_suffix', default_value='',
+        'topic_version_suffix', default_value='_v1',
         description=(
-            'Sufijo de version de mensaje que agrega el firmware a ciertos topics '
-            '(vehicle_status, vehicle_local_position). "" (vacio, default) para '
-            'firmware v1.14 (FC actual, anterior al versionado de mensajes de PX4). '
-            '"_v1" para firmware v1.17 (HKUST_NXT_DUAL) -- en ese caso, ademas, '
-            'cambiar la branch de px4_msgs a fc-v17-82e3322e y recompilar.'
+            'Sufijo de version que el firmware anade a los topics de mensajes '
+            'versionados. En este SITL (PX4 main) es "_v1": el cliente uXRCE-DDS '
+            'publica /fmu/out/vehicle_status_v1 y /fmu/out/vehicle_local_position_v1. '
+            'OJO: dds_topics.yaml lista los nombres SIN sufijo, se anade en runtime '
+            'segun MESSAGE_VERSION -- mirar el yaml enganna. Verificar siempre con '
+            '"ros2 topic list | grep vehicle_local_position". Un nombre equivocado '
+            'no da error: da silencio.'
+        ),
+    )
+    run_agent_arg = DeclareLaunchArgument(
+        'run_agent', default_value='true',
+        description=(
+            'Arrancar el MicroXRCEAgent aqui. Ponlo a false si ya lo levanto '
+            'sitl.launch.py, o dos agentes pelearan por el puerto 8888.'
         ),
     )
 
     micro_xrce_agent = ExecuteProcess(
-        cmd=['MicroXRCEAgent', 'serial', '--dev', '/dev/ttyAMA0', '-b', '921600'],
+        # SITL: el cliente uXRCE-DDS de PX4 sale por UDP al 8888, no por serie.
+        # En el dron real seria: serial --dev /dev/ttyAMA0 -b 921600
+        cmd=['MicroXRCEAgent', 'udp4', '-p', '8888'],
         name='micro_xrce_agent',
         output='screen',
+        condition=IfCondition(LaunchConfiguration('run_agent')),
     )
 
     takeoff_position_hold_outdoor = Node(
@@ -52,6 +65,7 @@ def generate_launch_description():
         takeoff_height_arg,
         hold_seconds_arg,
         topic_version_suffix_arg,
+        run_agent_arg,
         micro_xrce_agent,
         takeoff_position_hold_outdoor,
     ])

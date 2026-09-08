@@ -2,6 +2,16 @@
 
 # px4_drone
 
+> ### 🎮 Rama `gazebo-sim`
+>
+> Esta rama es la adaptación a **Gazebo Sim**: los mismos nodos, sin cambios en
+> `src/` ni `include/`, pero con el agente uXRCE-DDS por **UDP** en vez de serie y
+> un `sitl.launch.py` que levanta el simulador completo.
+> Ver **[`docs/gazebo_sim.md`](docs/gazebo_sim.md)**.
+>
+> Para el dron real, usar la rama `main`.
+
+
 🛸 ROS 2 (C++/Python) package for **PX4 Offboard control** from a Raspberry Pi
 companion computer — arming/mode sequencing, failsafe verification, and
 takeoff→hold→land flight, talking to the flight controller over

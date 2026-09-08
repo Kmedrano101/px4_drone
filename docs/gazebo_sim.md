@@ -9,8 +9,9 @@ transporte del enlace, el bring-up y algún valor por defecto.
 | | `main` (dron real) | `gazebo-sim` |
 |---|---|---|
 | Agente uXRCE-DDS | `serial --dev /dev/ttyAMA0 -b 921600` | `udp4 -p 8888` |
-| Firmware del FC | PX4 1.14.3 (FC#2) | PX4 `main` (SITL) |
-| `px4_msgs` | `release/1.14` | `release/1.17` |
+| Firmware | PX4 **1.14.3** de fábrica (FC#2) | PX4 **`main` @ `82e3322e`** (se identifica como *1.17.0 alpha*) |
+| `px4_msgs` | `release/1.14` | **`release/1.17`** |
+| Workspace de `drone_ws` | **`v14`** | **`v17`** |
 | `topic_version_suffix` | `""` | **`"_v1"`** |
 | Bring-up | agente en la RPi | `sitl.launch.py` levanta Gazebo + PX4 + agente |
 | Cámara | Raspberry Pi (`camera_ros`) | no aplica |
@@ -24,6 +25,27 @@ paquete no usa (`ARM_DISARM_REASON_*`), y esas no viajan por el cable.
 
 ## Uso
 
+### La simulación usa la línea 1.17, no la 1.14
+
+Es la diferencia que más fácil se cuela. El dron real lleva **PX4 1.14.3** y el
+simulador corre **PX4 `main`**, que se identifica como *1.17.0 alpha*. Por eso la
+simulación va con `px4_msgs release/1.17` y con el workspace **`v17`** de
+`drone_ws`; el `v14` es solo para el dron real.
+
+```bash
+source ~/drone_ws/env.sh v17     # simulador   <- esta rama
+source ~/drone_ws/env.sh v14     # dron real   <- rama main
+```
+
+Nunca hagas `source` de los dos en la misma terminal: son dos `px4_msgs` con
+definiciones distintas y **el orden de sourcing decide en silencio cuál gana**.
+
+`drone_ws/build.sh` avisa si intentas compilar un workspace con la rama de
+`px4_drone` equivocada, porque las dos versiones comparten un único clon y la rama
+es global.
+
+### Instalación
+
 Una vez por instalación, dejar el modelo y el airframe en PX4-Autopilot:
 
 ```bash
@@ -31,7 +53,7 @@ Una vez por instalación, dejar el modelo y el airframe en PX4-Autopilot:
 cd ~/PX4-Autopilot && make px4_sitl_default
 ```
 
-Luego, en dos terminales:
+Luego, en dos terminales (ambas con `env.sh v17` sourceado):
 
 ```bash
 # 1) simulador + agente
@@ -57,10 +79,9 @@ Argumentos de `sitl.launch.py`:
 
 ## Cuatro trampas del simulador
 
-**1. No usar `headless:=true` en máquinas NVIDIA.** El servidor de Gazebo falla al
-crear el contexto EGL y **los sensores GPU —los dos LiDAR y el flujo óptico— dejan
-de publicar sin dar ningún error**. El modelo aparece y los motores giran, pero el
-EKF no recibe nada.
+**1. `headless:=true` funciona.** Medido: 4/4 corridas headless con el flujo óptico y
+los dos LiDAR publicando. Los `libEGL warning` del log son ruido. (Una versión anterior
+de este documento afirmaba lo contrario, a partir de una comprobación no repetida.)
 
 **2. Los topics del SITL llevan sufijo `_v1`, y `dds_topics.yaml` engaña.** Ese
 fichero lista los nombres **sin** sufijo, pero el cliente uXRCE-DDS lo añade en

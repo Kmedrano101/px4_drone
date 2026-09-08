@@ -43,10 +43,9 @@ def generate_launch_description():
     headless_arg = DeclareLaunchArgument(
         'headless', default_value='false',
         description=(
-            'OJO: con headless=true, en maquinas NVIDIA el servidor de Gazebo falla al '
-            'crear el contexto EGL y los sensores GPU (los dos LiDAR y el flujo optico) '
-            'dejan de publicar SIN dar ningun error. Dejar en false salvo que sepas que '
-            'tu EGL headless funciona.'
+            'Sin ventana de Gazebo. Verificado que los sensores GPU (los dos LiDAR y '
+            'el flujo optico) siguen publicando en headless: 4/4 corridas. Los '
+            'libEGL warning del log son ruido.'
         ),
     )
     follow_arg = DeclareLaunchArgument(

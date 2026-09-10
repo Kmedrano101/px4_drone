@@ -1,0 +1,14 @@
+[Unit]
+Description=px4_drone webapp de control de campo
+After=network.target
+
+[Service]
+Type=simple
+User=kevin
+WorkingDirectory=/home/kevin/drone_ws/src/px4_drone/tools/webui
+ExecStart=/usr/bin/python3 /home/kevin/drone_ws/src/px4_drone/tools/webui/app.py
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

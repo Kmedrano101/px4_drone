@@ -213,7 +213,10 @@ Descubiertos empíricamente, en orden de aparición durante las pruebas:
 
 2. **PX4 exige una conexión activa a QGC o a RC antes de permitir el ARM**
    ("by default, you cannot arm a vehicle without a connection to ground
-   station (QGC) or an established RC connection").
+   station (QGC) or an established RC connection"). Es un **O**, no un
+   **Y**: verificado en hardware (2026-09-10) que arma con QGC **cerrado**,
+   solo con el RC encendido — relevante para el flujo de campo por AP +
+   webapp (`tools/webui/`), donde no hay laptop con QGC disponible.
 
 3. **El switch de modo de vuelo del RC no debe estar en una posición que
    compita con el modo pedido por software.** Si el switch físico está en

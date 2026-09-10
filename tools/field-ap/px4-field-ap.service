@@ -1,0 +1,13 @@
+[Unit]
+Description=px4_drone AP de campo (wlan0 -> Drone-UAS) al arrancar
+After=network.target systemd-networkd.service
+Wants=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/home/kevin/drone_ws/src/px4_drone/tools/field-ap/enable-field-ap.sh
+ExecStop=/home/kevin/drone_ws/src/px4_drone/tools/field-ap/disable-field-ap.sh
+
+[Install]
+WantedBy=multi-user.target

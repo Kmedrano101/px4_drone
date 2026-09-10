@@ -6,27 +6,32 @@ cada test.
 
 ## 1. AP de campo (`field-ap/`)
 
-Wifi propio de la Pi (`wlan0`), independiente del wifi del lab. **No** se
-activa solo -- es un toggle manual, para no perder la conexión normal del
-lab sin querer.
+Wifi propio de la Pi (`wlan0`), independiente del wifi del lab.
+**Activo por defecto en todo boot** (`px4-field-ap.service`) -- a propósito,
+para que el dron se recupere solo tras un corte de batería en campo, sin
+depender de acceso previo por SSH. `wlan0` **no** se conecta sola al wifi
+del lab mientras este servicio esté habilitado.
 
 ```bash
 sudo apt install -y hostapd dnsmasq iw
-sudo systemctl unmask hostapd
-sudo systemctl disable hostapd dnsmasq   # el toggle los prende/apaga a mano
-
-sudo tools/field-ap/install.sh           # copia las configs a /etc, una sola vez
+sudo tools/field-ap/install.sh   # copia configs a /etc, habilita el AP en cada boot
 ```
 
-Uso:
+⚠️ **`install.sh` deja el AP activo de inmediato.** Si estás conectado por
+SSH a través de `wlan0`, esto te corta. Conectate por `eth0` (cable) o desde
+teclado/monitor local antes de correrlo.
+
+Uso manual (toggle temporal, hasta el próximo reinicio -- el servicio
+vuelve a poner el AP en el boot siguiente):
 ```bash
-sudo tools/field-ap/enable-field-ap.sh   # SSID Drone-UAS / adminadmin, IP 192.168.4.1
-sudo tools/field-ap/disable-field-ap.sh  # vuelve al wifi cliente normal
+sudo tools/field-ap/disable-field-ap.sh  # vuelve a wlan0 cliente (lab)
+sudo tools/field-ap/enable-field-ap.sh   # vuelve al AP sin esperar un reboot
 ```
 
-⚠️ **Si estás conectado por SSH a través de `wlan0`, `enable-field-ap.sh` te
-corta.** Conectate por `eth0` (cable) o desde teclado/monitor local antes de
-correrlo.
+Para volver el AP a manual-solamente (no arrancar solo en boot):
+```bash
+sudo systemctl disable px4-field-ap.service
+```
 
 ## 2. Webapp de control (`webui/`)
 
@@ -64,8 +69,11 @@ los dos; ver `docs/offboard_control.md` sección 6, punto 2).
 
 ## Checklist para ir a campo
 
-1. `sudo tools/field-ap/enable-field-ap.sh` (necesita estar en `eth0` o local)
-2. Conectar el celular a `Drone-UAS` / `adminadmin`
-3. Abrir `http://192.168.4.1:5000`
-4. RC encendido, switch de modo en Offboard, kill switch a mano
-5. Al terminar: `sudo tools/field-ap/disable-field-ap.sh` para volver al wifi normal
+El AP ya está activo por defecto (arranca solo con la Pi) -- no hace falta
+prenderlo a mano salvo que lo hayas desactivado antes en el lab.
+
+1. Conectar el celular a `Drone-UAS` / `adminadmin`
+2. Abrir `http://192.168.4.1:5000`
+3. RC encendido, switch de modo en Offboard, kill switch a mano
+4. De vuelta en el lab: `sudo tools/field-ap/disable-field-ap.sh` si querés
+   `wlan0` cliente hasta el próximo reinicio (o `eth0` para acceso directo)

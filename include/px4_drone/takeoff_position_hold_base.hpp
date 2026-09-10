@@ -1,6 +1,7 @@
 #ifndef PX4_DRONE__TAKEOFF_POSITION_HOLD_BASE_HPP_
 #define PX4_DRONE__TAKEOFF_POSITION_HOLD_BASE_HPP_
 
+#include <cstddef>
 #include <string>
 
 #include <rclcpp/rclcpp.hpp>
@@ -15,7 +16,13 @@
 //
 // Maquina de estados:
 //   kWaitPositionSource -> kWarmup -> kRequestOffboard -> kArm -> kTakeoff
-//   -> kHold -> kLand -> kFinished
+//   -> kHold -> [kPattern] -> kLand -> kFinished
+//
+// kPattern es opcional: solo se entra si pattern_distance_m > 0. Recorre las
+// cuatro direcciones cardinales del CUERPO del dron volviendo al centro entre
+// cada una (adelante, centro, atras, centro, izquierda, centro, derecha,
+// centro), a la altura del hold y con el yaw congelado. Con la distancia a 0 el
+// nodo se comporta exactamente como antes.
 //
 // Las subclases solo definen que fuente de posicion deben verificar antes de
 // arrancar (GPS para exterior, estimador local con flujo optico + lidar para
@@ -55,6 +62,7 @@ private:
     kArm,
     kTakeoff,   // sube en linea recta desde el punto de armado hasta la altura objetivo
     kHold,      // mantiene esa posicion por hold_seconds_
+    kPattern,   // recorre las 4 direcciones cardinales volviendo al centro entre cada una
     kLand,      // entrega el aterrizaje a PX4 (VEHICLE_CMD_NAV_LAND) y espera el desarme
     kFinished
   };
@@ -69,6 +77,13 @@ private:
   void vehicleStatusCallback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
   void vehicleLocalPositionCallback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
   void vehicleCommandAckCallback(const px4_msgs::msg::VehicleCommandAck::SharedPtr msg);
+  // Destino del tramo `leg` en NED. Los desplazamientos se definen en ejes del
+  // CUERPO (adelante / derecha) y se giran con el yaw congelado del hold, para
+  // que "adelante" sea hacia donde apunta el morro y no hacia el norte.
+  void patternTargetNed(size_t leg, float * ned_x, float * ned_y) const;
+  static const char * patternLegName(size_t leg);
+  static size_t patternLegCount();
+
   static std::string navStateToString(uint8_t nav_state);
   static std::string commandResultToString(uint8_t result);
 
@@ -103,8 +118,18 @@ private:
   float target_z_ned_{0.0f};
   float target_yaw_ned_{0.0f};
 
+  // Centro del patron: la posicion que se mantuvo durante el hold. Se guarda
+  // aparte de target_*_ned_ porque esos si se mueven al recorrer los tramos.
+  float center_x_ned_{0.0f};
+  float center_y_ned_{0.0f};
+  size_t pattern_leg_{0};
+  bool pattern_arrived_{false};
+  uint64_t pattern_arrived_cycle_{0};
+
   const float takeoff_height_m_;  // metros a subir en ENU (Z hacia arriba) desde el punto de armado
   const float hold_seconds_;
+  const float pattern_distance_m_;    // 0 = sin patron, se aterriza justo despues del hold
+  const float pattern_settle_seconds_;  // pausa al llegar a cada punto, para que se estabilice
 
   static constexpr float kLoopRateHz = 20.0f;
   static constexpr uint64_t kPositionSourceTimeoutCycles = 200;  // 10 s
@@ -115,6 +140,8 @@ private:
   static constexpr uint64_t kTakeoffTimeoutCycles = 300;         // 15 s max para alcanzar la altura objetivo
   static constexpr float kAltitudeToleranceM = 0.15f;
   static constexpr uint64_t kLandTimeoutCycles = 1200;           // 60 s max esperando desarme
+  static constexpr float kPatternToleranceM = 0.20f;             // radio para dar un tramo por alcanzado
+  static constexpr uint64_t kPatternLegTimeoutCycles = 240;      // 12 s max por tramo
 
   static constexpr uint16_t PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6;
 };

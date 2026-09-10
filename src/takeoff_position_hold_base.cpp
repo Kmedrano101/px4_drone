@@ -1,5 +1,6 @@
 #include "px4_drone/takeoff_position_hold_base.hpp"
 
+#include <cmath>
 #include <limits>
 
 #include "px4_drone/frame_transforms.hpp"
@@ -17,7 +18,11 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
   takeoff_height_m_(static_cast<float>(
       declare_parameter<double>("takeoff_height_m", default_takeoff_height_m))),
   hold_seconds_(static_cast<float>(
-      declare_parameter<double>("hold_seconds", default_hold_seconds)))
+      declare_parameter<double>("hold_seconds", default_hold_seconds))),
+  pattern_distance_m_(static_cast<float>(
+      declare_parameter<double>("pattern_distance_m", 0.0))),
+  pattern_settle_seconds_(static_cast<float>(
+      declare_parameter<double>("pattern_settle_seconds", 3.0)))
 {
   const bool confirm_takeoff = declare_parameter<bool>("confirm_takeoff", false);
   // Ver comentario equivalente en offboard_control.cpp: "" para firmware
@@ -29,6 +34,14 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
       get_logger(),
       "Este nodo va a DESPEGAR de verdad. Por seguridad no arranca sin la confirmacion "
       "explicita: relanzar con --ros-args -p confirm_takeoff:=true. Nodo detenido.");
+    ok_to_run_ = false;
+    return;
+  }
+
+  if (pattern_distance_m_ < 0.0f) {
+    RCLCPP_FATAL(
+      get_logger(), "pattern_distance_m no puede ser negativo (recibido %.2f). Nodo detenido.",
+      pattern_distance_m_);
     ok_to_run_ = false;
     return;
   }
@@ -73,10 +86,20 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
     std::chrono::duration_cast<std::chrono::milliseconds>(period),
     std::bind(&TakeoffPositionHoldBase::onTimer, this));
 
-  RCLCPP_WARN(
-    get_logger(),
-    "%s iniciado: VA A DESPEGAR %.1f m y mantener posicion %.0f s.",
-    node_name.c_str(), takeoff_height_m_, hold_seconds_);
+  if (pattern_distance_m_ > 0.0f) {
+    RCLCPP_WARN(
+      get_logger(),
+      "%s iniciado: VA A DESPEGAR %.1f m, mantener posicion %.0f s y despues recorrer "
+      "%.2f m en las 4 direcciones (adelante/atras/izquierda/derecha), volviendo al "
+      "centro entre cada una. Necesita %.2f m libres alrededor del punto de despegue.",
+      node_name.c_str(), takeoff_height_m_, hold_seconds_, pattern_distance_m_,
+      pattern_distance_m_);
+  } else {
+    RCLCPP_WARN(
+      get_logger(),
+      "%s iniciado: VA A DESPEGAR %.1f m y mantener posicion %.0f s.",
+      node_name.c_str(), takeoff_height_m_, hold_seconds_);
+  }
 }
 
 void TakeoffPositionHoldBase::onTimer()
@@ -216,10 +239,86 @@ void TakeoffPositionHoldBase::onTimer()
           RCLCPP_INFO(get_logger(), "Manteniendo posicion por %.0f s...", hold_seconds_);
         }
         if (cycle_count_ >= static_cast<uint64_t>(hold_seconds_ * kLoopRateHz)) {
-          RCLCPP_INFO(get_logger(), "Fin del hold. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
+          if (pattern_distance_m_ > 0.0f) {
+            // El centro del patron es donde se estuvo manteniendo, no el punto
+            // de armado: si hubo deriva durante el hold, el patron sale desde
+            // donde esta el dron de verdad.
+            center_x_ned_ = target_x_ned_;
+            center_y_ned_ = target_y_ned_;
+            RCLCPP_INFO(
+              get_logger(), "Fin del hold. Recorriendo el patron de %.2f m (%zu tramos)...",
+              pattern_distance_m_, patternLegCount());
+            state_ = State::kPattern;
+            pattern_leg_ = 0;
+            pattern_arrived_ = false;
+            cycle_count_ = 0;
+          } else {
+            RCLCPP_INFO(
+              get_logger(), "Fin del hold. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
+            publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
+            state_ = State::kLand;
+            cycle_count_ = 0;
+          }
+        }
+        break;
+      }
+
+    case State::kPattern: {
+        publishOffboardControlMode();
+
+        float leg_x_ned = 0.0f;
+        float leg_y_ned = 0.0f;
+        patternTargetNed(pattern_leg_, &leg_x_ned, &leg_y_ned);
+        publishTrajectorySetpoint(leg_x_ned, leg_y_ned, target_z_ned_, target_yaw_ned_);
+
+        if (cycle_count_ == 1) {
+          RCLCPP_INFO(
+            get_logger(), "Tramo %zu/%zu: %s -> NED (%.2f, %.2f)",
+            pattern_leg_ + 1, patternLegCount(), patternLegName(pattern_leg_),
+            leg_x_ned, leg_y_ned);
+        }
+
+        const auto * lp = localPosition();
+        if (!pattern_arrived_) {
+          const bool en_destino = lp != nullptr &&
+            std::hypot(lp->x - leg_x_ned, lp->y - leg_y_ned) < kPatternToleranceM;
+
+          if (en_destino || cycle_count_ >= kPatternLegTimeoutCycles) {
+            if (!en_destino) {
+              // No se aborta: puede ser deriva del estimador o un tramo lento.
+              // Se avisa y se sigue, que es lo que hace tambien kTakeoff.
+              RCLCPP_WARN(
+                get_logger(),
+                "Tramo %zu (%s) no confirmado en %.0f s (error %.2f m). Se continua igual.",
+                pattern_leg_ + 1, patternLegName(pattern_leg_),
+                kPatternLegTimeoutCycles / kLoopRateHz,
+                lp != nullptr ? std::hypot(lp->x - leg_x_ned, lp->y - leg_y_ned) : -1.0f);
+            }
+            pattern_arrived_ = true;
+            pattern_arrived_cycle_ = cycle_count_;
+          }
+          break;
+        }
+
+        // Ya llego: se queda quieto el tiempo de asentamiento antes del
+        // siguiente tramo, para no encadenar movimientos con el dron aun
+        // oscilando.
+        if (cycle_count_ <
+          pattern_arrived_cycle_ + static_cast<uint64_t>(pattern_settle_seconds_ * kLoopRateHz))
+        {
+          break;
+        }
+
+        ++pattern_leg_;
+        pattern_arrived_ = false;
+        cycle_count_ = 0;
+
+        if (pattern_leg_ >= patternLegCount()) {
+          RCLCPP_INFO(
+            get_logger(),
+            "Patron completo. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
           publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
           state_ = State::kLand;
-          cycle_count_ = 0;
         }
         break;
       }
@@ -246,6 +345,60 @@ void TakeoffPositionHoldBase::onTimer()
   }
 
   ++cycle_count_;
+}
+
+namespace
+{
+// Desplazamientos en ejes del CUERPO: {adelante, derecha}, en unidades de
+// pattern_distance_m. Se vuelve al centro entre cada direccion a proposito: el
+// objetivo es medir ida y vuelta de cada eje por separado, no dibujar un
+// recorrido continuo.
+struct PatternLeg
+{
+  const char * nombre;
+  float adelante;
+  float derecha;
+};
+
+constexpr PatternLeg kPatternLegs[] = {
+  {"adelante", 1.0f, 0.0f},
+  {"centro", 0.0f, 0.0f},
+  {"atras", -1.0f, 0.0f},
+  {"centro", 0.0f, 0.0f},
+  {"izquierda", 0.0f, -1.0f},
+  {"centro", 0.0f, 0.0f},
+  {"derecha", 0.0f, 1.0f},
+  {"centro", 0.0f, 0.0f},
+};
+}  // namespace
+
+size_t TakeoffPositionHoldBase::patternLegCount()
+{
+  return sizeof(kPatternLegs) / sizeof(kPatternLegs[0]);
+}
+
+const char * TakeoffPositionHoldBase::patternLegName(size_t leg)
+{
+  return leg < patternLegCount() ? kPatternLegs[leg].nombre : "?";
+}
+
+void TakeoffPositionHoldBase::patternTargetNed(size_t leg, float * ned_x, float * ned_y) const
+{
+  if (leg >= patternLegCount()) {
+    *ned_x = center_x_ned_;
+    *ned_y = center_y_ned_;
+    return;
+  }
+
+  const float adelante = kPatternLegs[leg].adelante * pattern_distance_m_;
+  const float derecha = kPatternLegs[leg].derecha * pattern_distance_m_;
+
+  // En NED el yaw se mide desde el Norte y crece hacia el Este, asi que el
+  // vector "morro" es (cos yaw, sin yaw) y el "ala derecha" (-sin yaw, cos yaw).
+  const float c = std::cos(target_yaw_ned_);
+  const float s = std::sin(target_yaw_ned_);
+  *ned_x = center_x_ned_ + adelante * c - derecha * s;
+  *ned_y = center_y_ned_ + adelante * s + derecha * c;
 }
 
 void TakeoffPositionHoldBase::publishOffboardControlMode()

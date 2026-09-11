@@ -15,8 +15,15 @@
 // Base comun para nodos de despegue + mantenimiento de posicion en OFFBOARD.
 //
 // Maquina de estados:
-//   kWaitPositionSource -> kWarmup -> kRequestOffboard -> kArm -> kTakeoff
-//   -> kHold -> [kPattern] -> kLand -> kFinished
+//   kWaitPositionSource -> kWarmup -> kWaitRcOffboard -> kRequestOffboard
+//   -> kArm -> kTakeoff -> kHold -> [kPattern] -> kLand -> kFinished
+//
+// kWaitRcOffboard exige que el switch de modo del RC ya este puesto en
+// OFFBOARD (nav_state_user_intention) antes de pedir el cambio de modo: el
+// nodo nunca "fuerza" OFFBOARD con el switch en otra posicion, es el piloto
+// quien decide entrar. Ver controlLostDuringFlight() para la salida
+// simetrica: si el piloto mueve el switch fuera de OFFBOARD durante el
+// vuelo, el nodo deja de publicar de inmediato.
 //
 // kPattern es opcional: solo se entra si pattern_distance_m > 0. Recorre las
 // cuatro direcciones cardinales del CUERPO del dron volviendo al centro entre
@@ -58,6 +65,7 @@ private:
   {
     kWaitPositionSource,  // esperando que la fuente de posicion (GPS o flujo optico+lidar) este sana
     kWarmup,              // streaming de setpoints antes de pedir el cambio de modo
+    kWaitRcOffboard,      // esperando que el piloto ponga el switch del RC en OFFBOARD
     kRequestOffboard,
     kArm,
     kTakeoff,   // sube en linea recta desde el punto de armado hasta la altura objetivo
@@ -77,6 +85,14 @@ private:
   void vehicleStatusCallback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
   void vehicleLocalPositionCallback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
   void vehicleCommandAckCallback(const px4_msgs::msg::VehicleCommandAck::SharedPtr msg);
+  // true si el FC ya no esta en OFFBOARD o reporta failsafe: el piloto (RC)
+  // o el propio FC tomaron el control. En ese caso deja de publicar
+  // setpoints/heartbeat offboard y pasa a kFinished sin tocar NAV_LAND ni
+  // ARM -- publicar heartbeat offboard con el control perdido es lo que
+  // permite que el FC vuelva a OFFBOARD solo en cuanto la condicion que
+  // disparo el failsafe desaparece (ver reporte de vuelo real 2026-09-11,
+  // "riesgo grave: reentrada automatica en OFFBOARD").
+  bool controlLostDuringFlight();
   // Destino del tramo `leg` en NED. Los desplazamientos se definen en ejes del
   // CUERPO (adelante / derecha) y se giran con el yaw congelado del hold, para
   // que "adelante" sea hacia donde apunta el morro y no hacia el norte.
@@ -101,7 +117,9 @@ private:
   State state_{State::kWaitPositionSource};
   uint64_t cycle_count_{0};
   uint8_t last_nav_state_{255};
+  uint8_t last_nav_state_user_intention_{255};
   uint8_t last_arming_state_{0};
+  bool last_failsafe_{false};
   bool offboard_confirmed_{false};
   bool arm_wait_started_{false};
   uint64_t arm_wait_start_cycle_{0};
@@ -134,6 +152,7 @@ private:
   static constexpr float kLoopRateHz = 20.0f;
   static constexpr uint64_t kPositionSourceTimeoutCycles = 200;  // 10 s
   static constexpr uint64_t kWarmupCycles = 100;                 // 5 s
+  static constexpr uint64_t kRcOffboardIntentTimeoutCycles = 200; // 10 s esperando el switch del RC
   static constexpr uint64_t kArmDelayCycles = 60;                // 3 s tras confirmar OFFBOARD
   static constexpr uint64_t kOffboardConfirmTimeoutCycles = 200; // 10 s
   static constexpr uint64_t kArmConfirmTimeoutCycles = 100;      // 5 s tras enviar el comando de ARM

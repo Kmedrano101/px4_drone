@@ -128,7 +128,30 @@ void TakeoffPositionHoldBase::onTimer()
         publishOffboardControlMode();
         publishHoldCurrentPosition();
         if (cycle_count_ >= kWarmupCycles) {
+          state_ = State::kWaitRcOffboard;
+          cycle_count_ = 0;
+        }
+        break;
+      }
+
+    case State::kWaitRcOffboard: {
+        publishOffboardControlMode();
+        publishHoldCurrentPosition();
+        if (cycle_count_ == 0) {
+          RCLCPP_INFO(
+            get_logger(), "Esperando que el switch de modo del RC este en OFFBOARD...");
+        }
+        if (last_nav_state_user_intention_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
+          RCLCPP_INFO(get_logger(), "Switch del RC en OFFBOARD confirmado.");
           state_ = State::kRequestOffboard;
+          cycle_count_ = 0;
+        } else if (cycle_count_ >= kRcOffboardIntentTimeoutCycles) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "El switch del RC no se puso en OFFBOARD tras %.0f s. Abortando "
+            "(no se toca OFFBOARD/ARM).",
+            kRcOffboardIntentTimeoutCycles / kLoopRateHz);
+          state_ = State::kFinished;
         }
         break;
       }
@@ -208,6 +231,9 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kTakeoff: {
+        if (controlLostDuringFlight()) {
+          break;
+        }
         publishOffboardControlMode();
         publishTrajectorySetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
         if (cycle_count_ == 1) {
@@ -233,6 +259,9 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kHold: {
+        if (controlLostDuringFlight()) {
+          break;
+        }
         publishOffboardControlMode();
         publishTrajectorySetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
         if (cycle_count_ == 1) {
@@ -264,6 +293,9 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kPattern: {
+        if (controlLostDuringFlight()) {
+          break;
+        }
         publishOffboardControlMode();
 
         float leg_x_ned = 0.0f;
@@ -469,6 +501,8 @@ void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedP
     last_nav_state_ = msg->nav_state;
   }
 
+  last_nav_state_user_intention_ = msg->nav_state_user_intention;
+
   // Ver comentario equivalente en offboard_control.cpp: el FC puede ya estar
   // en OFFBOARD antes de que este nodo lo pida (corrida previa, switch del
   // RC ya puesto), y en ese caso nav_state nunca "cambia" tras la
@@ -489,6 +523,26 @@ void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedP
       msg->arming_state == VehicleStatus::ARMING_STATE_ARMED ? "ARMED" : "DISARMED");
     last_arming_state_ = msg->arming_state;
   }
+
+  if (msg->failsafe != last_failsafe_) {
+    RCLCPP_WARN(get_logger(), "failsafe: %s", msg->failsafe ? "true" : "false");
+    last_failsafe_ = msg->failsafe;
+  }
+}
+
+bool TakeoffPositionHoldBase::controlLostDuringFlight()
+{
+  if (last_nav_state_ != VehicleStatus::NAVIGATION_STATE_OFFBOARD || last_failsafe_) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "Se perdio el control OFFBOARD durante el vuelo (nav_state=%s, failsafe=%s). Dejando de "
+      "publicar setpoints/heartbeat offboard; no se toca NAV_LAND ni ARM. El piloto (RC) o el "
+      "FC tienen el control.",
+      navStateToString(last_nav_state_).c_str(), last_failsafe_ ? "true" : "false");
+    state_ = State::kFinished;
+    return true;
+  }
+  return false;
 }
 
 void TakeoffPositionHoldBase::vehicleLocalPositionCallback(

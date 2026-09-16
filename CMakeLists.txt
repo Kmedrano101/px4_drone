@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 include_directories(include)
 
@@ -55,6 +56,13 @@ target_include_directories(takeoff_position_hold_indoor PUBLIC
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(takeoff_position_hold_indoor rclcpp px4_msgs)
 install(TARGETS takeoff_position_hold_indoor DESTINATION lib/${PROJECT_NAME})
+
+add_executable(ev_odometry_bridge src/ev_odometry_bridge.cpp)
+target_include_directories(ev_odometry_bridge PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(ev_odometry_bridge rclcpp px4_msgs tf2_ros)
+install(TARGETS ev_odometry_bridge DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
   launch

@@ -64,6 +64,22 @@ target_include_directories(ev_odometry_bridge PUBLIC
 ament_target_dependencies(ev_odometry_bridge rclcpp px4_msgs tf2_ros)
 install(TARGETS ev_odometry_bridge DESTINATION lib/${PROJECT_NAME})
 
+add_executable(ev_offboard_handshake src/ev_offboard_handshake.cpp)
+target_include_directories(ev_offboard_handshake PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(ev_offboard_handshake rclcpp px4_msgs)
+install(TARGETS ev_offboard_handshake DESTINATION lib/${PROJECT_NAME})
+
+add_executable(takeoff_position_hold_ev
+  src/takeoff_position_hold_ev.cpp
+  src/takeoff_position_hold_base.cpp)
+target_include_directories(takeoff_position_hold_ev PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(takeoff_position_hold_ev rclcpp px4_msgs)
+install(TARGETS takeoff_position_hold_ev DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY
   launch
   config

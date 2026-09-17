@@ -234,6 +234,11 @@ void TakeoffPositionHoldBase::onTimer()
         if (controlLostDuringFlight()) {
           break;
         }
+        if (!positionSourceHealthyDuringFlight()) {
+          abortToLand(
+            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
+          break;
+        }
         publishOffboardControlMode();
         publishTrajectorySetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
         if (cycle_count_ == 1) {
@@ -260,6 +265,11 @@ void TakeoffPositionHoldBase::onTimer()
 
     case State::kHold: {
         if (controlLostDuringFlight()) {
+          break;
+        }
+        if (!positionSourceHealthyDuringFlight()) {
+          abortToLand(
+            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
           break;
         }
         publishOffboardControlMode();
@@ -294,6 +304,11 @@ void TakeoffPositionHoldBase::onTimer()
 
     case State::kPattern: {
         if (controlLostDuringFlight()) {
+          break;
+        }
+        if (!positionSourceHealthyDuringFlight()) {
+          abortToLand(
+            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
           break;
         }
         publishOffboardControlMode();
@@ -543,6 +558,14 @@ bool TakeoffPositionHoldBase::controlLostDuringFlight()
     return true;
   }
   return false;
+}
+
+void TakeoffPositionHoldBase::abortToLand(const std::string & reason)
+{
+  RCLCPP_ERROR(get_logger(), "%s Aterrizando (VEHICLE_CMD_NAV_LAND)...", reason.c_str());
+  publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
+  state_ = State::kLand;
+  cycle_count_ = 0;
 }
 
 void TakeoffPositionHoldBase::vehicleLocalPositionCallback(

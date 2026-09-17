@@ -55,9 +55,34 @@ protected:
   virtual bool positionSourceReady() const = 0;
   virtual std::string positionSourceName() const = 0;
 
+  // Chequeo continuo durante kTakeoff/kHold/kPattern (a diferencia de
+  // positionSourceReady(), que solo se evalua una vez antes de despegar).
+  // Default true: indoor/outdoor no lo sobreescriben, ya que PX4 mismo
+  // dispara un cambio de nav_state/failsafe si su fuente de posicion se
+  // invalida (detectado por controlLostDuringFlight()). Las subclases cuya
+  // fuente de posicion puede degradarse sin que PX4 lo note como failsafe
+  // (ej. external vision con otra ayuda de respaldo todavia activa) la
+  // sobreescriben. Si devuelve false, el nodo aterriza (a diferencia de
+  // controlLostDuringFlight(), que solo deja de publicar): aca el nodo
+  // todavia tiene el control, tiene que soltarlo el mismo.
+  virtual bool positionSourceHealthyDuringFlight() const {return true;}
+
   const px4_msgs::msg::VehicleLocalPosition * localPosition() const
   {
     return last_local_position_.get();
+  }
+
+  float takeoffHeightM() const {return takeoff_height_m_;}
+
+  // Permite que una subclase rechace arrancar desde el cuerpo de su propio
+  // constructor (despues de construir la base), para chequeos que dependen
+  // de parametros propios de la subclase. No se puede hacer con un virtual
+  // llamado desde el constructor de la base: la vtable de la subclase
+  // todavia no esta lista durante la construccion de la base.
+  void refuseToRun(const std::string & reason)
+  {
+    RCLCPP_FATAL(get_logger(), "%s Nodo detenido.", reason.c_str());
+    ok_to_run_ = false;
   }
 
 private:
@@ -93,6 +118,11 @@ private:
   // disparo el failsafe desaparece (ver reporte de vuelo real 2026-09-11,
   // "riesgo grave: reentrada automatica en OFFBOARD").
   bool controlLostDuringFlight();
+  // Aterrizaje forzado por positionSourceHealthyDuringFlight() == false: a
+  // diferencia de controlLostDuringFlight() (que solo deja de publicar
+  // porque el control ya no es nuestro), aca el nodo todavia tiene el
+  // control y es el que tiene que soltarlo mandando VEHICLE_CMD_NAV_LAND.
+  void abortToLand(const std::string & reason);
   // Destino del tramo `leg` en NED. Los desplazamientos se definen en ejes del
   // CUERPO (adelante / derecha) y se giran con el yaw congelado del hold, para
   // que "adelante" sea hacia donde apunta el morro y no hacia el norte.

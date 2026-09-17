@@ -1,0 +1,452 @@
+#include "px4_drone/ev_offboard_handshake.hpp"
+
+#include <cmath>
+#include <limits>
+
+using px4_msgs::msg::VehicleOdometry;
+using px4_msgs::msg::OffboardControlMode;
+using px4_msgs::msg::TrajectorySetpoint;
+using px4_msgs::msg::VehicleCommand;
+using px4_msgs::msg::VehicleCommandAck;
+using px4_msgs::msg::VehicleLocalPosition;
+using px4_msgs::msg::VehicleStatus;
+
+EvOffboardHandshake::EvOffboardHandshake(float default_hold_seconds)
+: Node("ev_offboard_handshake"),
+  active_cycles_(static_cast<uint64_t>(
+      declare_parameter<double>("hold_seconds", default_hold_seconds) * kLoopRateHz))
+{
+  const std::string v = declare_parameter<std::string>("topic_version_suffix", "");
+
+  rclcpp::QoS qos(1);
+  qos.best_effort();
+  qos.transient_local();
+  qos.keep_last(1);
+
+  rclcpp::QoS status_qos(5);
+  status_qos.best_effort();
+
+  offboard_control_mode_pub_ = create_publisher<OffboardControlMode>(
+    "/fmu/in/offboard_control_mode", qos);
+  trajectory_setpoint_pub_ = create_publisher<TrajectorySetpoint>(
+    "/fmu/in/trajectory_setpoint", qos);
+  vehicle_command_pub_ = create_publisher<VehicleCommand>(
+    "/fmu/in/vehicle_command", qos);
+
+  vehicle_status_sub_ = create_subscription<VehicleStatus>(
+    "/fmu/out/vehicle_status" + v, status_qos,
+    std::bind(&EvOffboardHandshake::vehicleStatusCallback, this, std::placeholders::_1));
+
+  vehicle_local_position_sub_ = create_subscription<VehicleLocalPosition>(
+    "/fmu/out/vehicle_local_position" + v, status_qos,
+    std::bind(&EvOffboardHandshake::vehicleLocalPositionCallback, this, std::placeholders::_1));
+
+  // Se escucha la salida del propio puente (ev_odometry_bridge) para saber si
+  // el SLAM sigue vivo. No se usa estimator_status_flags: la 1.14.3 no lo
+  // publica (ver la nota en el .hpp).
+  ev_odometry_sub_ = create_subscription<VehicleOdometry>(
+    "/fmu/in/vehicle_visual_odometry" + v, status_qos,
+    std::bind(&EvOffboardHandshake::evOdometryCallback, this, std::placeholders::_1));
+
+  vehicle_command_ack_sub_ = create_subscription<VehicleCommandAck>(
+    "/fmu/out/vehicle_command_ack", status_qos,
+    std::bind(&EvOffboardHandshake::vehicleCommandAckCallback, this, std::placeholders::_1));
+
+  const auto period = std::chrono::duration<double>(1.0 / kLoopRateHz);
+  timer_ = create_wall_timer(
+    std::chrono::duration_cast<std::chrono::milliseconds>(period),
+    std::bind(&EvOffboardHandshake::onTimer, this));
+
+  RCLCPP_WARN(
+    get_logger(),
+    "ev_offboard_handshake iniciado a %.0f Hz. Exige LiDAR 2D sano antes de armar "
+    "(xy/z_valid, heading_good_for_control, !dead_reckoning, eph < %.1f m y odometria EV "
+    "de menos de %.0f ms). Modo POSICION, hold fijo en el origen, NUNCA comanda despegue. "
+    "Hold armado: %.0f s (parametro hold_seconds).",
+    kLoopRateHz, static_cast<double>(kMaxEphM), kEvOdometryMaxAgeS * 1000.0,
+    active_cycles_ / kLoopRateHz);
+}
+
+bool EvOffboardHandshake::evOdometryFresh() const
+{
+  if (!ev_odometry_seen_) {
+    return false;
+  }
+  return (rclcpp::Clock(RCL_ROS_TIME).now() - last_ev_odometry_stamp_).seconds() <
+         kEvOdometryMaxAgeS;
+}
+
+bool EvOffboardHandshake::evReady() const
+{
+  const auto * lp = last_local_position_.get();
+  // heading_good_for_control es la senal de que el yaw del EV se fusiono
+  // (yaw_align): sin magnetometro es la unica confirmacion que hay, y solo
+  // llega si el puente publica pose_frame = NED, no FRD.
+  return lp != nullptr && lp->xy_valid && lp->z_valid && lp->heading_good_for_control &&
+         !lp->dead_reckoning && std::isfinite(lp->eph) && lp->eph < kMaxEphM &&
+         evOdometryFresh();
+}
+
+void EvOffboardHandshake::onTimer()
+{
+  switch (state_) {
+    case State::kWaitEvReady: {
+        if (cycle_count_ == 0) {
+          RCLCPP_INFO(
+            get_logger(),
+            "Esperando LiDAR 2D (xy/z_valid, heading_good_for_control, !dead_reckoning, "
+            "eph y odometria EV fresca)...");
+        }
+        if (evReady()) {
+          RCLCPP_INFO(
+            get_logger(), "LiDAR 2D listo (eph=%.2f m, heading_good_for_control=true).",
+            static_cast<double>(last_local_position_->eph));
+          state_ = State::kWarmup;
+          cycle_count_ = 0;
+        } else if (cycle_count_ >= kEvReadyTimeoutCycles) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "LiDAR 2D no disponible tras %.0f s. Abortando (no se toca OFFBOARD/ARM).",
+            kEvReadyTimeoutCycles / kLoopRateHz);
+          state_ = State::kFinished;
+        }
+        break;
+      }
+
+    case State::kWarmup: {
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+        if (cycle_count_ >= kWarmupCycles) {
+          state_ = State::kWaitRcOffboard;
+          cycle_count_ = 0;
+        }
+        break;
+      }
+
+    case State::kWaitRcOffboard: {
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+        if (cycle_count_ == 0) {
+          RCLCPP_INFO(
+            get_logger(), "Esperando que el switch de modo del RC este en OFFBOARD...");
+        }
+        if (last_nav_state_user_intention_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
+          RCLCPP_INFO(get_logger(), "Switch del RC en OFFBOARD confirmado.");
+          state_ = State::kRequestOffboard;
+          cycle_count_ = 0;
+        } else if (cycle_count_ >= kRcOffboardIntentTimeoutCycles) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "El switch del RC no se puso en OFFBOARD tras %.0f s. Abortando "
+            "(no se toca OFFBOARD/ARM).",
+            kRcOffboardIntentTimeoutCycles / kLoopRateHz);
+          state_ = State::kFinished;
+        }
+        break;
+      }
+
+    case State::kRequestOffboard: {
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+        publishVehicleCommand(
+          VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1.0f, PX4_CUSTOM_MAIN_MODE_OFFBOARD);
+        RCLCPP_INFO(get_logger(), "Solicitando modo OFFBOARD...");
+        state_ = State::kArm;
+        cycle_count_ = 0;
+        break;
+      }
+
+    case State::kArm: {
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+
+        if (!offboard_confirmed_) {
+          if (cycle_count_ >= kOffboardConfirmTimeoutCycles) {
+            RCLCPP_WARN(
+              get_logger(),
+              "No se confirmo el cambio a OFFBOARD (nav_state) en %.0f s. Abortando intento de ARM.",
+              kOffboardConfirmTimeoutCycles / kLoopRateHz);
+            state_ = State::kFinished;
+          }
+          break;
+        }
+
+        if (!arm_wait_started_) {
+          arm_wait_started_ = true;
+          arm_wait_start_cycle_ = cycle_count_;
+        }
+
+        if (cycle_count_ == arm_wait_start_cycle_ + kArmDelayCycles) {
+          publishVehicleCommand(
+            VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+            VehicleCommand::ARMING_ACTION_ARM);
+          RCLCPP_INFO(get_logger(), "Solicitando ARM...");
+        }
+
+        if (arm_confirmed_) {
+          state_ = State::kActive;
+          cycle_count_ = 0;
+        } else if (cycle_count_ >= arm_wait_start_cycle_ + kArmDelayCycles + kArmConfirmTimeoutCycles) {
+          RCLCPP_ERROR(
+            get_logger(), "El FC no confirmo ARMED tras %.0f s de enviado el comando. Abortando.",
+            kArmConfirmTimeoutCycles / kLoopRateHz);
+          state_ = State::kFinished;
+        }
+        break;
+      }
+
+    case State::kActive: {
+        if (external_disarm_detected_) {
+          RCLCPP_WARN(
+            get_logger(),
+            "*** KILL SWITCH OK: desarme externo detectado (no fue este nodo) mientras estaba "
+            "en OFFBOARD armado. El kill switch del RC tiene prioridad sobre OFFBOARD. ***");
+          state_ = State::kFinished;
+          break;
+        }
+
+        if (last_nav_state_ != VehicleStatus::NAVIGATION_STATE_OFFBOARD || last_failsafe_) {
+          RCLCPP_ERROR(
+            get_logger(),
+            "Se perdio el control OFFBOARD (nav_state=%s, failsafe=%s). Dejando de publicar "
+            "setpoints/heartbeat offboard; no se toca ARM. El piloto (RC) o el FC tienen el "
+            "control.",
+            navStateToString(last_nav_state_).c_str(), last_failsafe_ ? "true" : "false");
+          state_ = State::kFinished;
+          break;
+        }
+
+        if (!evOdometryFresh() || last_local_position_ == nullptr ||
+          !last_local_position_->xy_valid || last_local_position_->dead_reckoning)
+        {
+          RCLCPP_ERROR(
+            get_logger(),
+            "LiDAR 2D dejo de estar sano (odometria EV fresca=%s, xy_valid=%s, "
+            "dead_reckoning=%s). Solicitando DESARME...",
+            evOdometryFresh() ? "true" : "false",
+            (last_local_position_ && last_local_position_->xy_valid) ? "true" : "false",
+            (last_local_position_ && last_local_position_->dead_reckoning) ? "true" : "false");
+          publishVehicleCommand(
+            VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+            VehicleCommand::ARMING_ACTION_DISARM);
+          state_ = State::kDisarm;
+          cycle_count_ = 0;
+          break;
+        }
+
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+        if (cycle_count_ == 1) {
+          RCLCPP_INFO(
+            get_logger(),
+            "ARMADO en OFFBOARD (posicion, hold fijo, sin despegue) con LiDAR 2D. Ventana de "
+            "%.0f s; si no se interrumpe, este nodo desarma solo al final.",
+            active_cycles_ / kLoopRateHz);
+        }
+        if (cycle_count_ >= active_cycles_) {
+          publishVehicleCommand(
+            VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+            VehicleCommand::ARMING_ACTION_DISARM);
+          RCLCPP_INFO(
+            get_logger(), "Ventana terminada sin desarme externo. Solicitando DESARME normal...");
+          state_ = State::kDisarm;
+          cycle_count_ = 0;
+        }
+        break;
+      }
+
+    case State::kDisarm: {
+        // Seguimos streameando setpoints hasta confirmar el desarme: si el
+        // FC tarda en procesar el comando y de repente dejamos de publicar,
+        // se dispararia el failsafe de perdida de heartbeat en vez de un
+        // desarme limpio.
+        publishOffboardControlMode();
+        publishTrajectorySetpoint();
+        if (disarm_confirmed_) {
+          RCLCPP_INFO(get_logger(), "*** HANDSHAKE OK: desarme confirmado. ***");
+          state_ = State::kFinished;
+        } else if (cycle_count_ >= kDisarmConfirmTimeoutCycles) {
+          RCLCPP_WARN(
+            get_logger(), "No se confirmo el desarme tras %.0f s.",
+            kDisarmConfirmTimeoutCycles / kLoopRateHz);
+          state_ = State::kFinished;
+        }
+        break;
+      }
+
+    case State::kFinished:
+      timer_->cancel();
+      RCLCPP_INFO(get_logger(), "Test de handshake EV finalizado.");
+      break;
+  }
+
+  ++cycle_count_;
+}
+
+void EvOffboardHandshake::publishOffboardControlMode()
+{
+  OffboardControlMode msg{};
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  msg.position = true;
+  msg.velocity = false;
+  msg.acceleration = false;
+  msg.attitude = false;
+  msg.body_rate = false;
+  offboard_control_mode_pub_->publish(msg);
+}
+
+void EvOffboardHandshake::publishTrajectorySetpoint()
+{
+  // Hold fijo en el origen NED (0,0,0): igual que offboard_position_handshake.cpp,
+  // este nodo nunca comanda un despegue, asi que no importa la posicion real.
+  TrajectorySetpoint msg{};
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  msg.position = {0.0f, 0.0f, 0.0f};
+  msg.velocity = {nan, nan, nan};
+  msg.acceleration = {nan, nan, nan};
+  msg.yaw = 0.0f;
+  trajectory_setpoint_pub_->publish(msg);
+}
+
+void EvOffboardHandshake::publishVehicleCommand(uint16_t command, float param1, float param2)
+{
+  VehicleCommand msg{};
+  msg.param1 = param1;
+  msg.param2 = param2;
+  msg.command = command;
+  msg.target_system = 1;
+  msg.target_component = 1;
+  msg.source_system = 1;
+  msg.source_component = 1;
+  msg.from_external = true;
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  vehicle_command_pub_->publish(msg);
+}
+
+void EvOffboardHandshake::vehicleStatusCallback(const VehicleStatus::SharedPtr msg)
+{
+  if (msg->nav_state != last_nav_state_) {
+    RCLCPP_INFO(
+      get_logger(), "nav_state: %s -> %s",
+      navStateToString(last_nav_state_).c_str(), navStateToString(msg->nav_state).c_str());
+    last_nav_state_ = msg->nav_state;
+  }
+
+  last_nav_state_user_intention_ = msg->nav_state_user_intention;
+
+  // Evaluado en cada mensaje (no solo en el "cambio" de arriba): el FC
+  // puede ya estar en OFFBOARD antes de que este nodo lo pida.
+  if (state_ == State::kArm && !offboard_confirmed_ &&
+    msg->nav_state == VehicleStatus::NAVIGATION_STATE_OFFBOARD)
+  {
+    offboard_confirmed_ = true;
+    RCLCPP_INFO(get_logger(), "OFFBOARD confirmado por el FC, esperando %.1f s antes de armar...",
+      kArmDelayCycles / kLoopRateHz);
+  }
+
+  if (msg->arming_state != last_arming_state_) {
+    RCLCPP_INFO(
+      get_logger(), "arming_state: %s",
+      msg->arming_state == VehicleStatus::ARMING_STATE_ARMED ? "ARMED" : "DISARMED");
+    last_arming_state_ = msg->arming_state;
+  }
+
+  if (msg->failsafe != last_failsafe_) {
+    RCLCPP_WARN(get_logger(), "failsafe: %s", msg->failsafe ? "true" : "false");
+    last_failsafe_ = msg->failsafe;
+  }
+
+  if (state_ == State::kArm && !arm_confirmed_ &&
+    msg->arming_state == VehicleStatus::ARMING_STATE_ARMED)
+  {
+    arm_confirmed_ = true;
+  }
+
+  if (state_ == State::kDisarm && !disarm_confirmed_ &&
+    msg->arming_state != VehicleStatus::ARMING_STATE_ARMED)
+  {
+    disarm_confirmed_ = true;
+  }
+
+  // En kActive este nodo nunca pide un desarme por su cuenta sin salir antes
+  // de este estado (ver onTimer: tanto el fin normal del hold como el LiDAR
+  // 2D quedando no sano mueven state_ a kDisarm en el mismo ciclo en que se
+  // manda el comando) -- asi que cualquier transicion a desarmado mientras
+  // seguimos en kActive solo puede venir de afuera: el kill switch del RC
+  // (u otra intervencion externa, ej. QGC).
+  if (state_ == State::kActive && !external_disarm_detected_ &&
+    msg->arming_state != VehicleStatus::ARMING_STATE_ARMED)
+  {
+    external_disarm_detected_ = true;
+  }
+}
+
+void EvOffboardHandshake::vehicleLocalPositionCallback(const VehicleLocalPosition::SharedPtr msg)
+{
+  last_local_position_ = msg;
+}
+
+void EvOffboardHandshake::evOdometryCallback(const VehicleOdometry::SharedPtr msg)
+{
+  (void)msg;
+  last_ev_odometry_stamp_ = rclcpp::Clock(RCL_ROS_TIME).now();
+  if (!ev_odometry_seen_) {
+    RCLCPP_INFO(get_logger(), "Primera odometria EV recibida del puente SLAM.");
+    ev_odometry_seen_ = true;
+  }
+}
+
+void EvOffboardHandshake::vehicleCommandAckCallback(const VehicleCommandAck::SharedPtr msg)
+{
+  RCLCPP_INFO(
+    get_logger(), "vehicle_command_ack: command=%u result=%s (result_param1=%u)",
+    msg->command, commandResultToString(msg->result).c_str(), msg->result_param1);
+}
+
+std::string EvOffboardHandshake::commandResultToString(uint8_t result)
+{
+  using Ack = px4_msgs::msg::VehicleCommandAck;
+  switch (result) {
+    case Ack::VEHICLE_CMD_RESULT_ACCEPTED: return "ACCEPTED";
+    case Ack::VEHICLE_CMD_RESULT_TEMPORARILY_REJECTED: return "TEMPORARILY_REJECTED";
+    case Ack::VEHICLE_CMD_RESULT_DENIED: return "DENIED";
+    case Ack::VEHICLE_CMD_RESULT_UNSUPPORTED: return "UNSUPPORTED";
+    case Ack::VEHICLE_CMD_RESULT_FAILED: return "FAILED";
+    case Ack::VEHICLE_CMD_RESULT_IN_PROGRESS: return "IN_PROGRESS";
+    case Ack::VEHICLE_CMD_RESULT_CANCELLED: return "CANCELLED";
+    default: return "UNKNOWN(" + std::to_string(result) + ")";
+  }
+}
+
+std::string EvOffboardHandshake::navStateToString(uint8_t nav_state)
+{
+  switch (nav_state) {
+    case VehicleStatus::NAVIGATION_STATE_MANUAL: return "MANUAL";
+    case VehicleStatus::NAVIGATION_STATE_ALTCTL: return "ALTCTL";
+    case VehicleStatus::NAVIGATION_STATE_POSCTL: return "POSCTL";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_MISSION: return "AUTO_MISSION";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_LOITER: return "AUTO_LOITER";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_RTL: return "AUTO_RTL";
+    case VehicleStatus::NAVIGATION_STATE_ACRO: return "ACRO";
+    case VehicleStatus::NAVIGATION_STATE_DESCEND: return "DESCEND";
+    case VehicleStatus::NAVIGATION_STATE_TERMINATION: return "TERMINATION";
+    case VehicleStatus::NAVIGATION_STATE_OFFBOARD: return "OFFBOARD";
+    case VehicleStatus::NAVIGATION_STATE_STAB: return "STAB";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_TAKEOFF: return "AUTO_TAKEOFF";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_LAND: return "AUTO_LAND";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_FOLLOW_TARGET: return "AUTO_FOLLOW_TARGET";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_PRECLAND: return "AUTO_PRECLAND";
+    case VehicleStatus::NAVIGATION_STATE_ORBIT: return "ORBIT";
+    case VehicleStatus::NAVIGATION_STATE_AUTO_VTOL_TAKEOFF: return "AUTO_VTOL_TAKEOFF";
+    default: return "UNKNOWN(" + std::to_string(nav_state) + ")";
+  }
+}
+
+int main(int argc, char * argv[])
+{
+  rclcpp::init(argc, argv);
+  rclcpp::spin(std::make_shared<EvOffboardHandshake>());
+  rclcpp::shutdown();
+  return 0;
+}

@@ -113,7 +113,12 @@ void EvOdometryBridge::onTimer()
   VehicleOdometry msg{};
   msg.timestamp = now_us;
   msg.timestamp_sample = now_us;
-  msg.pose_frame = VehicleOdometry::POSE_FRAME_FRD;
+  // NED, no FRD: la pose ya viene convertida a NED arriba (enuNedSwap /
+  // yawEnuNedSwap), asi que FRD era una etiqueta falsa. Ademas EKF2 1.14.3
+  // trata las dos ramas distinto a proposito (ev_yaw_control.cpp:139-170):
+  // con NED hace resetQuatStateYaw y pone yaw_align = true; con FRD lo deja
+  // en false, y entonces heading_good_for_control no llega a ser true nunca.
+  msg.pose_frame = VehicleOdometry::POSE_FRAME_NED;
   msg.position = {position_ned[0], position_ned[1], position_ned[2]};
   msg.q = {q_ned[0], q_ned[1], q_ned[2], q_ned[3]};
   msg.velocity_frame = VehicleOdometry::VELOCITY_FRAME_UNKNOWN;

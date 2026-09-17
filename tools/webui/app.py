@@ -25,6 +25,7 @@ import time
 from flask import Flask, jsonify, request, render_template
 
 WORKSPACE = "/home/kevin/drone_ws"
+EXTRA_WS = "/home/kevin/evarobot_ws"
 TOPIC_VERSION_SUFFIX = ""  # firmware v1.14, ver docstring arriba
 
 app = Flask(__name__)
@@ -205,6 +206,7 @@ def launch():
         cmd_str = " ".join(shlex.quote(a) for a in cmd_args)
         full_cmd = (
             f"source /opt/ros/jazzy/setup.bash && "
+            f"source {EXTRA_WS}/install/setup.bash && "
             f"source {WORKSPACE}/install/setup.bash && "
             f"export ROS_DOMAIN_ID=0 && "
             f"{cmd_str}"
@@ -228,6 +230,7 @@ def launch():
         bag_path = os.path.join(LOG_DIR, f"{run_id}_bag")
         bag_cmd = (
             f"source /opt/ros/jazzy/setup.bash && "
+            f"source {EXTRA_WS}/install/setup.bash && "
             f"source {WORKSPACE}/install/setup.bash && "
             f"export ROS_DOMAIN_ID=0 && "
             f"ros2 bag record -a -o {shlex.quote(bag_path)}"

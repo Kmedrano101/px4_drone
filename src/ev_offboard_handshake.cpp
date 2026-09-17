@@ -277,6 +277,7 @@ void EvOffboardHandshake::onTimer()
     case State::kFinished:
       timer_->cancel();
       RCLCPP_INFO(get_logger(), "Test de handshake EV finalizado.");
+      rclcpp::shutdown();
       break;
   }
 

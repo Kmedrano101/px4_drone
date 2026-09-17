@@ -388,6 +388,7 @@ void TakeoffPositionHoldBase::onTimer()
 
     case State::kFinished:
       timer_->cancel();
+      rclcpp::shutdown();
       break;
   }
 
@@ -547,13 +548,16 @@ void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedP
 
 bool TakeoffPositionHoldBase::controlLostDuringFlight()
 {
-  if (last_nav_state_ != VehicleStatus::NAVIGATION_STATE_OFFBOARD || last_failsafe_) {
+  if (last_nav_state_ != VehicleStatus::NAVIGATION_STATE_OFFBOARD || last_failsafe_ ||
+    last_arming_state_ != VehicleStatus::ARMING_STATE_ARMED)
+  {
     RCLCPP_ERROR(
       get_logger(),
-      "Se perdio el control OFFBOARD durante el vuelo (nav_state=%s, failsafe=%s). Dejando de "
+      "Se perdio el control OFFBOARD durante el vuelo (nav_state=%s, failsafe=%s, arming_state=%s). Dejando de "
       "publicar setpoints/heartbeat offboard; no se toca NAV_LAND ni ARM. El piloto (RC) o el "
       "FC tienen el control.",
-      navStateToString(last_nav_state_).c_str(), last_failsafe_ ? "true" : "false");
+      navStateToString(last_nav_state_).c_str(), last_failsafe_ ? "true" : "false",
+      last_arming_state_ == VehicleStatus::ARMING_STATE_ARMED ? "ARMED" : "DISARMED");
     state_ = State::kFinished;
     return true;
   }

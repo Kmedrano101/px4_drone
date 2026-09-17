@@ -76,6 +76,13 @@
   <button id="stop-btn" onclick="stopTest()">STOP</button>
 </header>
 
+<div id="net-panel" style="margin:8px 0;padding:8px;border:1px solid #444;border-radius:6px">
+  <span id="net-mode">Red: consultando&hellip;</span>
+  <button onclick="switchNet(&quot;wifi&quot;)" style="margin-left:8px">Wifi de pruebas</button>
+  <button onclick="switchNet(&quot;ap&quot;)">AP Drone-UAS</button>
+  <div class="err" id="net-err"></div>
+</div>
+
 <div id="status-panel">
   <div id="status-line" class="idle">Sin test corriendo.</div>
   <div id="log-box"></div>
@@ -188,9 +195,45 @@ async function poll() {
   updateButtons();
 }
 
+
+async function pollNet() {
+  try {
+    const res = await fetch("/api/network");
+    const j = await res.json();
+    const txt = j.mode === "ap" ? "AP de campo (Drone-UAS)"
+              : j.mode === "wifi" ? ("wifi cliente" + (j.ssid ? " \u00b7 " + j.ssid : ""))
+              : "desconocida";
+    document.getElementById("net-mode").textContent = "Red: " + txt;
+  } catch (e) {
+    // si acabamos de cambiar de red, esto falla hasta reconectar por la otra
+  }
+}
+
+async function switchNet(mode) {
+  const aviso = mode === "wifi"
+    ? "La Pi pasara al wifi de pruebas. Si estas conectado por Drone-UAS, perderas esta pagina."
+    : "Se levantara el AP Drone-UAS. Si estas conectado por el wifi de pruebas, perderas esta pagina.";
+  if (!confirm(aviso)) return;
+  const err = document.getElementById("net-err");
+  err.textContent = "";
+  try {
+    const res = await fetch("/api/network", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({mode: mode})
+    });
+    const j = await res.json();
+    if (!j.ok) { err.textContent = j.error || "error"; return; }
+    document.getElementById("net-mode").textContent = "Red: cambiando\u2026";
+  } catch (e) {
+    err.textContent = "sin respuesta (puede que el cambio ya este en curso)";
+  }
+}
+
 updateButtons();
 poll();
 setInterval(poll, 1500);
+pollNet();
+setInterval(pollNet, 5000);
 </script>
 
 </body>

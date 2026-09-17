@@ -78,6 +78,25 @@ TESTS = {
             {"key": "pattern_settle_seconds", "label": "Pausa en cada punto (s)", "default": 4.0, "min": 1, "max": 30, "step": 0.5},
         ],
     },
+    "ev_handshake": {
+        "label": "EV handshake (LiDAR 2D, sin despegue)",
+        "desc": "Lanza LD19 + slam_toolbox + el puente EV, y arma en OFFBOARD exigiendo el LiDAR 2D (cs_ev_pos/cs_ev_yaw) sano -- mantiene el origen en el piso, sin despegar. Necesita EKF2_EV_CTRL=9 en el FC.",
+        "launch_file": "ev_offboard_handshake.launch.py",
+        "needs_confirm_takeoff": False,
+        "params": [
+            {"key": "hold_seconds", "label": "Segundos armado", "default": 10.0, "min": 3, "max": 300, "step": 1},
+        ],
+    },
+    "ev_takeoff": {
+        "label": "Ciclo completo LiDAR 2D + 1D",
+        "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.2 m. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
+        "launch_file": "takeoff_position_hold_ev.launch.py",
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 5.0, "min": 2, "max": 60, "step": 1},
+        ],
+    },
 }
 
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
@@ -257,6 +276,70 @@ def stop():
         _state["started_at"] = None
         _state["bag_path"] = None
         return jsonify({"ok": True})
+
+
+# --- Red: AP de campo (Drone-UAS) <-> wifi cliente del laboratorio ----------
+# Los scripts de tools/field-ap/ ya hacen todo el trabajo (parar o arrancar
+# netplan-wpa-wlan0, hostapd y dnsmasq). Aqui solo se invocan. Necesitan root:
+# hay una regla de sudoers NOPASSWD limitada a esos dos scripts exactos.
+_FIELD_AP_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "field-ap"))
+NET_SCRIPTS = {
+    "ap": os.path.join(_FIELD_AP_DIR, "enable-field-ap.sh"),
+    "wifi": os.path.join(_FIELD_AP_DIR, "disable-field-ap.sh"),
+}
+
+
+def _net_mode():
+    """Estado real de wlan0, preguntado a la interfaz y no a una variable
+    guardada: si alguien cambia la red por ssh, la pagina se entera igual."""
+    try:
+        out = subprocess.run(["iw", "dev", "wlan0", "info"],
+                             capture_output=True, text=True, timeout=5).stdout
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return {"mode": "desconocido", "ssid": None}
+    if "type AP" in out:
+        mode = "ap"
+    elif "type managed" in out:
+        mode = "wifi"
+    else:
+        mode = "desconocido"
+    ssid = None
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith("ssid "):
+            ssid = line[5:].strip()
+    return {"mode": mode, "ssid": ssid}
+
+
+@app.route("/api/network")
+def network_status():
+    return jsonify(_net_mode())
+
+
+@app.route("/api/network", methods=["POST"])
+def network_switch():
+    mode = (request.json or {}).get("mode")
+    if mode not in NET_SCRIPTS:
+        return jsonify({"ok": False, "error": "modo invalido"}), 400
+
+    with _lock:
+        # cambiar de red mata el enlace con el FC y el bag a medias: mismo
+        # criterio que el resto de la app, un solo cambio de estado a la vez
+        if _state["proc"] is not None and _state["proc"].poll() is None:
+            return jsonify({"ok": False,
+                            "error": "hay un test corriendo, paralo antes"}), 409
+
+    script = NET_SCRIPTS[mode]
+
+    def _switch():
+        subprocess.run(["sudo", "-n", script], check=False,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+    # en segundo plano y con retraso a proposito: el cambio corta la red del
+    # cliente, asi que la respuesta HTTP tiene que salir antes del corte
+    threading.Timer(1.0, _switch).start()
+    return jsonify({"ok": True, "mode": mode})
 
 
 if __name__ == "__main__":

@@ -67,15 +67,15 @@ TESTS = {
         ],
     },
     "cross_pattern": {
-        "label": "Patron cruz (4 direcciones)",
-        "desc": "Despega, hold, recorre adelante/atras/izquierda/derecha (cuerpo del dron) volviendo al centro entre cada tramo, aterriza. VUELO REAL -- empezar con 0.5 m, ver espacio libre necesario en el launch file.",
-        "launch_file": "cross_pattern_indoor.launch.py",
+        "label": "Patrón cruz LiDAR 2D (4 direcciones)",
+        "desc": "Lanza LD19 + slam_toolbox + puente EV. Despega a 1 m con LiDAR 1D + baro, recorre adelante/atras/izquierda/derecha volviendo al centro en cada tramo con SLAM 2D, y aterriza solo. Techo 1.2 m. VUELO REAL (espacio libre minimo 3x3 m).",
+        "launch_file": "cross_pattern_ev.launch.py",
         "needs_confirm_takeoff": True,
         "params": [
-            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 5.0, "step": 0.1},
-            {"key": "hold_seconds", "label": "Hold antes del patron (s)", "default": 8.0, "min": 2, "max": 120, "step": 1},
-            {"key": "pattern_distance_m", "label": "Distancia por tramo (m)", "default": 0.5, "min": 0.0, "max": 3.0, "step": 0.1},
-            {"key": "pattern_settle_seconds", "label": "Pausa en cada punto (s)", "default": 4.0, "min": 1, "max": 30, "step": 0.5},
+            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold antes del patron (s)", "default": 5.0, "min": 2, "max": 60, "step": 1},
+            {"key": "pattern_distance_m", "label": "Distancia por tramo (m)", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.1},
+            {"key": "pattern_settle_seconds", "label": "Pausa en cada punto (s)", "default": 3.0, "min": 1, "max": 15, "step": 0.5},
         ],
     },
     "ev_handshake": {

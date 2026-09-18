@@ -8,6 +8,9 @@ Escenarios (argv[1]):
   scanloss   - arma con todo libre; en vuelo el /scan deja de llegar: debe frenar y LAND
   slamlost   - arma con todo libre; en vuelo la sigma de /pose (SLAM) salta de 0.06 a 0.45 m,
                como en el vuelo del 2026-09-17: debe aterrizar
+  userhold   - patron en cruz; run_scenario.sh manda HOLD (SIGUSR1) en pleno tramo y despues
+               ATERRIZAR (SIGUSR2): debe frenar, quedarse quieto y aterrizar
+  cancel     - run_scenario.sh manda HOLD antes de armar: no debe armar
 Imprime lo que el nodo comanda. Correr con ROS_DOMAIN_ID aislado.
 """
 import math, sys, time
@@ -43,6 +46,8 @@ class MockFC(Node):
         self.z = 0.0
         self.last_sp = None
         self.braking_seen = False
+        self.pattern_seen = False
+        self.hold_logged = False
         self.land_seen = False
         self.create_timer(0.02, self.tick_fc)     # 50 Hz
         self.create_timer(0.1, self.tick_scan)    # 10 Hz
@@ -69,6 +74,14 @@ class MockFC(Node):
         if braking and not self.braking_seen:
             self.braking_seen = True
             self.log(f"SETPOINT DE FRENADO: position={list(m.position)} velocity={list(m.velocity)}")
+        if not math.isnan(m.position[0]):
+            far = abs(float(m.position[0])) > 0.5 or abs(float(m.position[1])) > 0.5
+            if far and not self.pattern_seen:
+                self.pattern_seen = True
+                self.log(f"el nodo manda un tramo del patron: position={[round(float(v), 2) for v in m.position]}")
+            if self.braking_seen and not far and not self.hold_logged:
+                self.hold_logged = True
+                self.log(f"SETPOINT DE HOLD (tras frenar): position={[round(float(v), 2) for v in m.position]}")
         self.last_sp = m
 
     def flight_time(self):
@@ -163,6 +176,10 @@ def main():
     while rclpy.ok() and time.time() < end:
         rclpy.spin_once(n, timeout_sec=0.05)
         if SCEN != "preflight" and n.land_seen and not n.armed:
+            # Seguir 1 s publicando DESARMADO: el nodo espera verlo para terminar.
+            t_end = time.time() + 1.0
+            while time.time() < t_end:
+                rclpy.spin_once(n, timeout_sec=0.05)
             break
     n.log(f"FIN: frenado visto={n.braking_seen}, LAND visto={n.land_seen}, armado alguna vez={n.t_arm is not None}")
 

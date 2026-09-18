@@ -1,6 +1,8 @@
 #include "px4_drone/takeoff_position_hold_base.hpp"
 
+#include <atomic>
 #include <cmath>
+#include <csignal>
 #include <limits>
 
 #include "px4_drone/frame_transforms.hpp"
@@ -11,6 +13,15 @@ using px4_msgs::msg::VehicleCommand;
 using px4_msgs::msg::VehicleCommandAck;
 using px4_msgs::msg::VehicleLocalPosition;
 using px4_msgs::msg::VehicleStatus;
+
+namespace
+{
+// Pedido de la webui: 0 ninguno, 1 HOLD (SIGUSR1), 2 ATERRIZAR (SIGUSR2). Un
+// atomic lock-free es lo unico que se puede tocar con seguridad en un handler
+// de senal; el lazo del nodo lo consume en el siguiente ciclo (50 ms).
+std::atomic<int> g_user_request{0};
+enum UserRequest : int { kNone = 0, kUserHoldRequest = 1, kUserLandRequest = 2 };
+}  // namespace
 
 TakeoffPositionHoldBase::TakeoffPositionHoldBase(
   const std::string & node_name, float default_takeoff_height_m, float default_hold_seconds)
@@ -24,8 +35,13 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
   pattern_settle_seconds_(static_cast<float>(
       declare_parameter<double>("pattern_settle_seconds", 3.0))),
   obstacle_brake_seconds_(static_cast<float>(
-      declare_parameter<double>("obstacle_brake_seconds", 2.0)))
+      declare_parameter<double>("obstacle_brake_seconds", 2.0))),
+  user_hold_timeout_s_(static_cast<float>(
+      declare_parameter<double>("user_hold_timeout_s", 120.0)))
 {
+  std::signal(SIGUSR1, [](int) {g_user_request.store(kUserHoldRequest);});
+  std::signal(SIGUSR2, [](int) {g_user_request.store(kUserLandRequest);});
+
   const bool confirm_takeoff = declare_parameter<bool>("confirm_takeoff", false);
   // Ver comentario equivalente en offboard_control.cpp: "" para firmware
   // v1.14 (default, FC actual), "_v1" para v1.17 (HKUST_NXT_DUAL).
@@ -106,6 +122,10 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
 
 void TakeoffPositionHoldBase::onTimer()
 {
+  if (handleUserRequest()) {
+    ++cycle_count_;
+    return;
+  }
   switch (state_) {
     case State::kWaitPositionSource: {
         if (cycle_count_ == 0) {
@@ -377,6 +397,35 @@ void TakeoffPositionHoldBase::onTimer()
         break;
       }
 
+    case State::kUserHold: {
+        if (flightChecksFailed()) {
+          break;
+        }
+        publishOffboardControlMode();
+        const auto brake_cycles = static_cast<uint64_t>(kUserHoldBrakeSeconds * kLoopRateHz);
+        if (!user_hold_captured_) {
+          // Primero frenar: si venia a mitad de tramo, fijar la posicion de
+          // este instante lo haria pasarse y volver.
+          publishBrakeSetpoint();
+          if (cycle_count_ >= brake_cycles) {
+            const auto * lp = localPosition();
+            user_hold_x_ned_ = lp != nullptr ? lp->x : target_x_ned_;
+            user_hold_y_ned_ = lp != nullptr ? lp->y : target_y_ned_;
+            user_hold_captured_ = true;
+            RCLCPP_WARN(
+              get_logger(), "HOLD: frenado. Manteniendo NED (%.2f, %.2f, %.2f). ATERRIZAR desde la "
+              "webui, o el piloto por RC; aterriza solo a los %.0f s.", user_hold_x_ned_,
+              user_hold_y_ned_, brake_z_ned_, user_hold_timeout_s_);
+          }
+          break;
+        }
+        publishTrajectorySetpoint(user_hold_x_ned_, user_hold_y_ned_, brake_z_ned_, target_yaw_ned_);
+        if (cycle_count_ >= static_cast<uint64_t>(user_hold_timeout_s_ * kLoopRateHz)) {
+          abortToLand(fmtHoldTimeout());
+        }
+        break;
+      }
+
     case State::kLand: {
         // A partir de aqui el FC controla el descenso (AUTO_LAND); no seguimos
         // publicando setpoints de offboard, igual que un GCS que suelta el
@@ -577,6 +626,72 @@ void TakeoffPositionHoldBase::abortToLand(const std::string & reason)
   publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
   state_ = State::kLand;
   cycle_count_ = 0;
+}
+
+bool TakeoffPositionHoldBase::handleUserRequest()
+{
+  const int req = g_user_request.exchange(kNone);
+  if (req == kNone) {
+    return false;
+  }
+  const char * what = req == kUserHoldRequest ? "HOLD" : "ATERRIZAR";
+  switch (state_) {
+    case State::kWaitPositionSource:
+    case State::kWarmup:
+    case State::kWaitRcOffboard:
+    case State::kRequestOffboard:
+    case State::kArm:
+      if (last_arming_state_ == VehicleStatus::ARMING_STATE_ARMED) {
+        break;  // armo en este mismo instante: se trata como vuelo (abajo)
+      }
+      RCLCPP_WARN(get_logger(), "%s desde la webui antes de armar: prueba cancelada, no se arma.", what);
+      state_ = State::kFinished;
+      return true;
+    case State::kLand:
+    case State::kFinished:
+      RCLCPP_INFO(get_logger(), "%s desde la webui ignorado: ya se esta aterrizando o termino.", what);
+      return false;
+    default:
+      break;
+  }
+  // En vuelo. Si el control ya no es nuestro (piloto o failsafe), no se toca.
+  if (controlLostDuringFlight()) {
+    return true;
+  }
+  if (req == kUserLandRequest) {
+    abortToLand("ATERRIZAR pedido desde la webui.");
+    return true;
+  }
+  if (state_ == State::kUserHold) {
+    RCLCPP_INFO(get_logger(), "HOLD desde la webui: ya estaba en hold.");
+    return false;
+  }
+  if (state_ == State::kObstacleStop) {
+    RCLCPP_INFO(get_logger(), "HOLD desde la webui ignorado: ya frenando por obstaculo.");
+    return false;
+  }
+  enterUserHold();
+  return true;
+}
+
+void TakeoffPositionHoldBase::enterUserHold()
+{
+  const auto * lp = localPosition();
+  brake_z_ned_ = (lp != nullptr && std::isfinite(lp->z)) ? lp->z : target_z_ned_;
+  user_hold_captured_ = false;
+  RCLCPP_WARN(
+    get_logger(), "HOLD pedido desde la webui: se detiene el desplazamiento (frenando %.1f s).",
+    kUserHoldBrakeSeconds);
+  state_ = State::kUserHold;
+  cycle_count_ = 0;
+  publishOffboardControlMode();
+  publishBrakeSetpoint();
+}
+
+std::string TakeoffPositionHoldBase::fmtHoldTimeout() const
+{
+  return "HOLD de la webui sin mas ordenes durante " +
+         std::to_string(static_cast<int>(user_hold_timeout_s_)) + " s.";
 }
 
 bool TakeoffPositionHoldBase::flightChecksFailed()

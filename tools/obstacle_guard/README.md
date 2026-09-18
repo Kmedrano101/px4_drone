@@ -54,7 +54,23 @@ el dron puede moverse reinicia el sector, y la velocidad sale de una regresión 
 ./run_scenario.sh approach    # pared a 1.2 m/s: frena a ~1.56 m y aterriza
 ./run_scenario.sh scanloss    # se corta /scan: frena a los 0.5 s y aterriza
 ./run_scenario.sh slamlost    # la sigma del SLAM salta a 0.45 m en vuelo: aterriza
+./run_scenario.sh userhold    # HOLD en pleno tramo de la cruz: frena, se queda quieto; ATERRIZAR: aterriza
+./run_scenario.sh cancel      # HOLD antes de armar: cancela sin armar
 ```
+
+## HOLD y ATERRIZAR desde la webui
+
+En las pruebas con despegue, la webui muestra **HOLD** y **ATERRIZAR**. Mandan SIGUSR1 / SIGUSR2
+al ejecutable del nodo, buscado dentro del grupo de procesos de la prueba. No se envían a
+`ros2 launch`: matar el envoltorio dejaría el nodo volando solo.
+
+- **HOLD:** frena 1 s (velocidad horizontal 0) y después mantiene la posición donde quedó, con todas
+  las protecciones activas (obstáculo, SLAM, control perdido). Aterriza solo pasados
+  `user_hold_timeout_s` (120 s).
+- **ATERRIZAR:** LAND, solo si el nodo aún tiene el control.
+- **Antes de armar:** cualquiera de los dos cancela la prueba sin armar.
+- **MATAR procesos** (el STOP de antes) corta todo, incluido el enlace con el FC. En pruebas de vuelo
+  pide confirmación, porque en el aire dispara el failsafe de Offboard.
 
 ## Salud del SLAM y varianza del EV (mismo día)
 

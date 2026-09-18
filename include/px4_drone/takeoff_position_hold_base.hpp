@@ -18,6 +18,14 @@
 //   kWaitPositionSource -> kWarmup -> kWaitRcOffboard -> kRequestOffboard
 //   -> kArm -> kTakeoff -> kHold -> [kPattern] -> kLand -> kFinished
 //   (kTakeoff/kHold/kPattern) -> kObstacleStop -> kLand   si obstacleTooClose()
+//   (kTakeoff/kHold/kPattern) -> kUserHold [-> kLand]      con SIGUSR1 (HOLD de la webui)
+//   cualquier estado de vuelo  -> kLand                     con SIGUSR2 (ATERRIZAR de la webui)
+//
+// La webui manda las senales directo al proceso del nodo: es instantaneo, no
+// hace falta levantar ROS para publicar nada, y no corta el SLAM, el puente EV
+// ni el enlace DDS con el FC (el STOP de antes mataba todo, y en vuelo eso
+// dispara el failsafe de Offboard del FC). Antes de armar, cualquiera de las
+// dos cancela la prueba sin armar.
 //
 // kWaitRcOffboard exige que el switch de modo del RC ya este puesto en
 // OFFBOARD (nav_state_user_intention) antes de pedir el cambio de modo: el
@@ -114,6 +122,7 @@ private:
     kHold,      // mantiene esa posicion por hold_seconds_
     kPattern,   // recorre las 4 direcciones cardinales volviendo al centro entre cada una
     kObstacleStop,  // frena (velocidad horizontal cero, altura mantenida) y despues aterriza
+    kUserHold,      // HOLD pedido desde la webui: frena y se queda quieto hasta ATERRIZAR o timeout
     kLand,      // entrega el aterrizaje a PX4 (VEHICLE_CMD_NAV_LAND) y espera el desarme
     kFinished
   };
@@ -147,6 +156,11 @@ private:
   // arrastrando al dron. Ver obstacle_guard.hpp.
   void enterObstacleStop(const std::string & reason);
   void publishBrakeSetpoint();
+  // Aplica un pedido pendiente de la webui (SIGUSR1/SIGUSR2). true = el
+  // estado cambio y el ciclo actual no debe seguir.
+  bool handleUserRequest();
+  void enterUserHold();
+  std::string fmtHoldTimeout() const;
   // Chequeos de vuelo comunes a kTakeoff/kHold/kPattern. true = el estado
   // cambio (control perdido, fuente de posicion caida u obstaculo) y el
   // llamador tiene que salir del ciclo sin publicar nada mas.
@@ -209,6 +223,10 @@ private:
   const float obstacle_brake_seconds_;  // frenado antes de pedir LAND tras un obstaculo
 
   float brake_z_ned_{0.0f};  // altura a mantener mientras se frena
+  const float user_hold_timeout_s_;  // HOLD de la webui: aterriza solo pasado este tiempo
+  bool user_hold_captured_{false};   // ya freno y fijo el punto de hold
+  float user_hold_x_ned_{0.0f};
+  float user_hold_y_ned_{0.0f};
   std::string obstacle_reason_;
 
   static constexpr float kLoopRateHz = 20.0f;
@@ -223,6 +241,8 @@ private:
   static constexpr uint64_t kLandTimeoutCycles = 1200;           // 60 s max esperando desarme
   static constexpr float kPatternToleranceM = 0.20f;             // radio para dar un tramo por alcanzado
   static constexpr uint64_t kPatternLegTimeoutCycles = 240;      // 12 s max por tramo
+
+  static constexpr float kUserHoldBrakeSeconds = 1.0f;  // frenado antes de fijar el punto de hold
 
   static constexpr uint16_t PX4_CUSTOM_MAIN_MODE_OFFBOARD = 6;
 };

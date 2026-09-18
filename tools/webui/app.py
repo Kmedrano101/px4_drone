@@ -17,6 +17,8 @@ historial de bugs de comunicacion de este proyecto).
 """
 import os
 import shlex
+
+import psutil
 import signal
 import subprocess
 import threading
@@ -63,6 +65,7 @@ TESTS = {
         "label": "Despegue + hold indoor",
         "desc": "Despega, mantiene posicion y aterriza solo. Requiere flujo optico/lidar valido. VUELO REAL.",
         "launch_file": "takeoff_position_hold_indoor.launch.py",
+        "node_exe": "takeoff_position_hold_indoor",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 5.0, "step": 0.1},
@@ -73,6 +76,7 @@ TESTS = {
         "label": "Despegue + hold outdoor",
         "desc": "Despega, mantiene posicion y aterriza solo. Requiere fix GPS 3D. VUELO REAL.",
         "launch_file": "takeoff_position_hold_outdoor.launch.py",
+        "node_exe": "takeoff_position_hold_outdoor",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 2.0, "min": 0.5, "max": 10.0, "step": 0.1},
@@ -83,6 +87,7 @@ TESTS = {
         "label": "Patrón cruz LiDAR 2D (4 direcciones)",
         "desc": "Lanza LD19 + slam_toolbox + puente EV. Despega a 1 m con LiDAR 1D + baro, recorre adelante/atras/izquierda/derecha volviendo al centro en cada tramo con SLAM 2D, y aterriza solo. Techo 1.2 m. Si un obstaculo (LiDAR 2D, 360 grados) se acerca a la distancia de parada, frena y aterriza; no arma si ya hay algo mas cerca. VUELO REAL (espacio libre minimo 3x3 m).",
         "launch_file": "cross_pattern_ev.launch.py",
+        "node_exe": "takeoff_position_hold_ev",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
@@ -118,6 +123,7 @@ TESTS = {
         "label": "Ciclo completo LiDAR 2D + 1D",
         "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.2 m. Parada por obstaculo con el LiDAR 2D (360 grados): frena y aterriza si algo se acerca a esa distancia. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
         "launch_file": "takeoff_position_hold_ev.launch.py",
+        "node_exe": "takeoff_position_hold_ev",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
@@ -325,6 +331,52 @@ def launch():
         _state["sysmon_proc"] = sysmon_proc
 
         return jsonify({"ok": True, "test_id": test_id, "cmd": cmd_str, "bag_path": bag_path})
+
+
+def _signal_node_locked(sig):
+    """Manda sig al ejecutable del nodo de vuelo de la prueba en curso.
+
+    Solo al nodo, buscado por su ejecutable dentro del grupo de procesos de la
+    prueba: mandarsela a ros2 launch (o a cualquier envoltorio) lo mataria y
+    dejaria el nodo volando sin nadie que lo pare. SIGUSR1 = HOLD, SIGUSR2 =
+    ATERRIZAR; ver TakeoffPositionHoldBase."""
+    proc = _state["proc"]
+    test = TESTS.get(_state["test_id"] or "", {})
+    exe = test.get("node_exe")
+    if proc is None or proc.poll() is not None:
+        return None, "no hay ninguna prueba corriendo"
+    if not exe:
+        return None, "esta prueba no tiene nodo de vuelo que acepte HOLD/ATERRIZAR"
+    pgid = os.getpgid(proc.pid)
+    for p in psutil.process_iter(["pid", "name", "exe"]):
+        try:
+            if os.getpgid(p.info["pid"]) != pgid:
+                continue
+        except ProcessLookupError:
+            continue
+        name = os.path.basename(p.info["exe"] or "") or p.info["name"] or ""
+        if name == exe or name == exe[:15]:
+            os.kill(p.info["pid"], sig)
+            return p.info["pid"], None
+    return None, f"no encuentro el proceso {exe} (ya termino?)"
+
+
+@app.route("/api/hold", methods=["POST"])
+def hold():
+    with _lock:
+        pid, err = _signal_node_locked(signal.SIGUSR1)
+    if err:
+        return jsonify({"error": err}), 409
+    return jsonify({"ok": True, "pid": pid})
+
+
+@app.route("/api/land", methods=["POST"])
+def land():
+    with _lock:
+        pid, err = _signal_node_locked(signal.SIGUSR2)
+    if err:
+        return jsonify({"error": err}), 409
+    return jsonify({"ok": True, "pid": pid})
 
 
 @app.route("/api/stop", methods=["POST"])

@@ -210,7 +210,7 @@ def summarize(rows, ncores, fmax, period):
             add(f"  {k:12s} CPU media {sum(c) / len(c):6.1f}%  p95 {pct(c, .95):6.1f}%  max {max(c):6.1f}%   "
                 f"RAM max {max(m):6.0f} MB")
     rates = {lbl: [r[lbl] for r in rows if r.get(lbl) is not None] for _, _, lbl in ROS_TOPICS}
-    if any(rates.values()):
+    if any(v and max(v) > 0 for v in rates.values()):
         add("Tasas ROS (Hz, media / min):")
         for lbl, v in rates.items():
             if v and max(v) > 0:

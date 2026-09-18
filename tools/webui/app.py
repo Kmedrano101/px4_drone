@@ -28,6 +28,12 @@ WORKSPACE = "/home/kevin/drone_ws"
 EXTRA_WS = "/home/kevin/evarobot_ws"
 TOPIC_VERSION_SUFFIX = ""  # firmware v1.14, ver docstring arriba
 
+# Pruebas que no son un ros2 launch sino un script suelto (hoy: la evaluacion
+# de sensores por MAVLink). Corren con el venv que tiene pymavlink, sin sourcear
+# ROS y sin grabar ros2 bag. Leen el FC por su USB-C conectado a la Pi.
+SCRIPT_PY = "/home/kevin/.venvs/mav/bin/python"
+TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+
 app = Flask(__name__)
 
 TESTS = {
@@ -88,6 +94,19 @@ TESTS = {
             {"key": "hold_seconds", "label": "Segundos armado", "default": 10.0, "min": 3, "max": 300, "step": 1},
         ],
     },
+    "sensor_eval": {
+        "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
+        "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",
+        "script": os.path.join(TOOLS_DIR, "sensor_eval", "flow_range_eval.py"),
+        "record_bag": False,
+        "needs_confirm_takeoff": False,
+        "params": [
+            {"key": "gt_height_m", "cli": "--gt-height", "label": "Altura real sensor-suelo (m, cinta)", "default": 1.0, "min": 0.1, "max": 6.0, "step": 0.01},
+            {"key": "gt_distance_m", "cli": "--gt-distance", "label": "Recorrido hacia el morro (m, 0 = solo quieto)", "default": 1.0, "min": 0.0, "max": 5.0, "step": 0.05},
+            {"key": "still_s", "cli": "--still", "label": "Fase quieto (s)", "default": 6.0, "min": 3, "max": 30, "step": 1},
+            {"key": "duration_s", "cli": "--duration", "label": "Duracion total (s)", "default": 25.0, "min": 8, "max": 120, "step": 1},
+        ],
+    },
     "ev_takeoff": {
         "label": "Ciclo completo LiDAR 2D + 1D",
         "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.2 m. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
@@ -132,7 +151,20 @@ def _stop_bag_locked():
     _state["bag_proc"] = None
 
 
+def _build_script_command(test):
+    args = [SCRIPT_PY, "-u", test["script"]]
+    for p in test["params"]:
+        value = float(request.json.get(p["key"], p["default"]))  # nunca texto del cliente
+        if not (p["min"] <= value <= p["max"]):
+            raise ValueError(f"{p['key']} fuera de rango")
+        args += [p["cli"], f"{value}"]
+    args += ["--out-dir", os.path.join(LOG_DIR, "sensor_eval")]
+    return args
+
+
 def _build_command(test):
+    if "script" in test:
+        return _build_script_command(test)
     args = ["ros2", "launch", "px4_drone", test["launch_file"]]
     # ros2 launch rechaza "clave:=" con valor vacio (formato invalido) -- el
     # launch file ya trae "" como default, asi que si no hay sufijo
@@ -183,6 +215,24 @@ def status():
         })
 
 
+def _start_bag(run_id):
+    bag_path = os.path.join(LOG_DIR, f"{run_id}_bag")
+    bag_cmd = (
+        f"source /opt/ros/jazzy/setup.bash && "
+        f"source {EXTRA_WS}/install/setup.bash && "
+        f"source {WORKSPACE}/install/setup.bash && "
+        f"export ROS_DOMAIN_ID=0 && "
+        f"ros2 bag record -a -o {shlex.quote(bag_path)}"
+    )
+    bag_log = open(os.path.join(LOG_DIR, f"{run_id}_bag.log"), "w")
+    bag_proc = subprocess.Popen(
+        ["bash", "-c", bag_cmd],
+        stdout=bag_log, stderr=subprocess.STDOUT,
+        cwd=WORKSPACE, preexec_fn=os.setsid,
+    )
+    return bag_path, bag_proc
+
+
 @app.route("/api/launch", methods=["POST"])
 def launch():
     body = request.json or {}
@@ -201,16 +251,19 @@ def launch():
         try:
             cmd_args = _build_command(test)
         except (TypeError, ValueError):
-            return jsonify({"error": "Parametro invalido (debe ser numerico)"}), 400
+            return jsonify({"error": "Parametro invalido (numerico y dentro del rango permitido)"}), 400
 
         cmd_str = " ".join(shlex.quote(a) for a in cmd_args)
-        full_cmd = (
-            f"source /opt/ros/jazzy/setup.bash && "
-            f"source {EXTRA_WS}/install/setup.bash && "
-            f"source {WORKSPACE}/install/setup.bash && "
-            f"export ROS_DOMAIN_ID=0 && "
-            f"{cmd_str}"
-        )
+        if "script" in test:
+            full_cmd = cmd_str
+        else:
+            full_cmd = (
+                f"source /opt/ros/jazzy/setup.bash && "
+                f"source {EXTRA_WS}/install/setup.bash && "
+                f"source {WORKSPACE}/install/setup.bash && "
+                f"export ROS_DOMAIN_ID=0 && "
+                f"{cmd_str}"
+            )
 
         run_id = f"{test_id}_{int(time.time())}"
         log_path = os.path.join(LOG_DIR, f"{run_id}.log")
@@ -227,20 +280,10 @@ def launch():
         # el .ulog del FC no muestra ese lado (ver docs/offboard_control.md
         # seccion 10 para los bugs de comunicacion que ya nos costaron caro
         # en este proyecto).
-        bag_path = os.path.join(LOG_DIR, f"{run_id}_bag")
-        bag_cmd = (
-            f"source /opt/ros/jazzy/setup.bash && "
-            f"source {EXTRA_WS}/install/setup.bash && "
-            f"source {WORKSPACE}/install/setup.bash && "
-            f"export ROS_DOMAIN_ID=0 && "
-            f"ros2 bag record -a -o {shlex.quote(bag_path)}"
-        )
-        bag_log = open(os.path.join(LOG_DIR, f"{run_id}_bag.log"), "w")
-        bag_proc = subprocess.Popen(
-            ["bash", "-c", bag_cmd],
-            stdout=bag_log, stderr=subprocess.STDOUT,
-            cwd=WORKSPACE, preexec_fn=os.setsid,
-        )
+        bag_path = None
+        bag_proc = None
+        if test.get("record_bag", True):
+            bag_path, bag_proc = _start_bag(run_id)
 
         _state["test_id"] = test_id
         _state["proc"] = proc

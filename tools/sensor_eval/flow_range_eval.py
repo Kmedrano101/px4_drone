@@ -30,6 +30,11 @@ PARAMS = ["SENS_FLOW_ROT", "SENS_FLOW_MINHGT", "SENS_FLOW_MAXHGT", "EKF2_OF_QMIN
           "EKF2_OF_N_MIN", "EKF2_OF_N_MAX", "EKF2_OF_POS_X", "EKF2_OF_POS_Z",
           "EKF2_MIN_RNG", "EKF2_RNG_NOISE", "EKF2_RNG_SFE", "EKF2_RNG_POS_Z",
           "EKF2_RNG_A_HMAX"]
+PLAUSIBLE_PCT = 25.0   # un error del LiDAR mayor que esto es casi seguro una altura mal introducida
+MIN_MOVE_FRAC = 0.2    # por debajo de este % del recorrido esperado, no hubo movimiento
+HIST_COLS = ["run_id", "gt_height_m", "lidar_mean_m", "lidar_std_m", "lidar_err_pct",
+             "flow_q_still", "flow_drift_m_s", "gt_distance_m", "flow_scale_err_pct_lidar_h",
+             "flow_scale_err_pct_gt_h", "flow_dir_deg", "usable_for_curve"]
 STREAMS = {M.MAVLINK_MSG_ID_DISTANCE_SENSOR: 50, M.MAVLINK_MSG_ID_OPTICAL_FLOW_RAD: 50,
            M.MAVLINK_MSG_ID_ATTITUDE: 50}
 
@@ -110,6 +115,30 @@ def fit_line(xs, ys):
     return a, my - a * mx
 
 
+def migrate_history(hist):
+    """Historial de antes de usable_for_curve: se reescribe con la columna, marcando como no usables
+    las corridas cuyo error del LiDAR no es verosimil (tipicamente una altura mal introducida)."""
+    if not os.path.exists(hist):
+        return
+    with open(hist) as f:
+        r = csv.DictReader(f)
+        if r.fieldnames == HIST_COLS:
+            return
+        rows = list(r)
+    for row in rows:
+        try:
+            ok = abs(100 * (float(row["lidar_mean_m"]) / float(row["gt_height_m"]) - 1)) <= PLAUSIBLE_PCT
+        except (TypeError, ValueError, KeyError, ZeroDivisionError):
+            ok = False
+        row["usable_for_curve"] = int(ok)
+    os.replace(hist, hist + ".bak")
+    with open(hist, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=HIST_COLS, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(rows)
+    log(f"(historial migrado al formato nuevo; copia del anterior en {hist}.bak)")
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--gt-height", type=float, required=True,
@@ -153,7 +182,6 @@ def main():
     log("")
     log(f">>> FASE QUIETO: manten el dron INMOVIL a {a.gt_height:.2f} m durante {a.still:.0f} s")
     next_print = t0 + 1.0
-    moved = False
     dx = dy = 0.0
     try:
         while True:
@@ -234,8 +262,14 @@ def main():
         log(f"  ruido (desv. tipica) {s['std']:.3f} m   rango {s['min']:.2f}-{s['max']:.2f} m   "
             f"invalidas {res['lidar']['invalid_pct']:.0f}%")
         log(f"  resolucion del sensor por MAVLink: 1 cm")
-        verdict = ("OK" if abs(err) <= max(0.03, 0.03 * a.gt_height) else
-                   "SESGO: revisar montaje/haz o calibracion del sensor")
+        if abs(pct) > PLAUSIBLE_PCT:
+            verdict = (f"NO SE USA PARA LA CURVA: {pct:+.0f}% es demasiado para un error del sensor. "
+                       "¿La altura introducida es la real? (prueba en banco = altura en patas, ~0.17 m)")
+        elif abs(err) <= max(0.03, 0.03 * a.gt_height):
+            verdict = "OK"
+        else:
+            verdict = "SESGO: revisar montaje/haz o calibracion del sensor"
+        res["lidar"]["usable_for_curve"] = abs(pct) <= PLAUSIBLE_PCT
         log(f"  veredicto: {verdict}")
         if prm.get("EKF2_RNG_NOISE") is not None:
             log(f"  EKF2_RNG_NOISE={prm['EKF2_RNG_NOISE']:.3f} m frente al ruido medido {s['std']:.3f} m"
@@ -276,18 +310,24 @@ def main():
                             "max_tilt_deg": tilt, "quality_mean": qm["mean"], "quality_min": qm["min"]}
         log(f"\n  MOVER: recorrido medido {d_l:.3f} m con altura del LiDAR, {d_g:.3f} m con la altura real"
             f"  (verdad {a.gt_distance:.2f} m)")
-        log(f"  error de escala: {res['flow_move']['scale_err_pct_lidar_h']:+.1f}% (altura LiDAR), "
-            f"{res['flow_move']['scale_err_pct_gt_h']:+.1f}% (altura real)")
-        log("    -> si solo falla con la altura del LiDAR, el error viene del LiDAR; si falla con las dos, del flujo")
-        log(f"  direccion en cuerpo: {ang:+.0f} deg (esperado ~0 = hacia el morro)   x={mx:+.2f} y={my:+.2f} m")
-        if abs(ang) > 30:
+        res["flow_move"]["moved"] = max(d_l, d_g) >= MIN_MOVE_FRAC * a.gt_distance
+        if not res["flow_move"]["moved"]:
+            log(f"  NO SE DETECTO MOVIMIENTO (menos del {100 * MIN_MOVE_FRAC:.0f}% de lo esperado): ¿se movio el dron?")
+            log("  -> escala y direccion no son validas en esta corrida")
+        if res["flow_move"]["moved"]:
+            log(f"  error de escala: {res['flow_move']['scale_err_pct_lidar_h']:+.1f}% (altura LiDAR), "
+                f"{res['flow_move']['scale_err_pct_gt_h']:+.1f}% (altura real)")
+            log("    -> si solo falla con la altura del LiDAR, el error viene del LiDAR; si falla con las dos, del flujo")
+            log(f"  direccion en cuerpo: {ang:+.0f} deg (esperado ~0 = hacia el morro)   x={mx:+.2f} y={my:+.2f} m")
+        if res["flow_move"]["moved"] and abs(ang) > 30:
             guess = {90: "rotado +90", -90: "rotado -90", 180: "rotado 180"}
             k = min(guess, key=lambda g: abs(((ang - g + 180) % 360) - 180))
             log(f"  !! DIRECCION INCORRECTA: el sensor parece {guess[k]} grados -> revisar SENS_FLOW_ROT "
                 f"(ahora {prm.get('SENS_FLOW_ROT', '?')})")
         log(f"  calidad en movimiento: media {qm['mean']:.0f}, min {qm['min']:.0f}   inclinacion max {tilt:.1f} deg"
             + ("  (alta: repetir mas nivelado)" if tilt > 10 else ""))
-        log("  nota: la 1.14.3 no tiene SENS_FLOW_SCALE; un error de escala no se corrige por parametro de PX4")
+        if res["flow_move"]["moved"]:
+            log("  nota: la 1.14.3 no tiene SENS_FLOW_SCALE; un error de escala no se corrige por parametro de PX4")
     elif a.gt_distance > 0:
         log("\n  MOVER: sin muestras de flujo validas en la fase de movimiento")
 
@@ -302,36 +342,44 @@ def main():
         json.dump(res, f, indent=2)
 
     hist = os.path.join(a.out_dir, "sensor_eval_history.csv")
+    migrate_history(hist)
     new = not os.path.exists(hist)
     with open(hist, "a", newline="") as f:
         w = csv.writer(f)
         if new:
-            w.writerow(["run_id", "gt_height_m", "lidar_mean_m", "lidar_std_m", "lidar_err_pct",
-                        "flow_q_still", "flow_drift_m_s", "gt_distance_m", "flow_scale_err_pct_lidar_h",
-                        "flow_scale_err_pct_gt_h", "flow_dir_deg"])
+            w.writerow(HIST_COLS)
         L, FS, FM = res.get("lidar", {}), res.get("flow_still", {}), res.get("flow_move", {})
+        moved = FM.get("moved", False)
         w.writerow([run_id, a.gt_height, L.get("mean"), L.get("std"), L.get("error_pct"),
                     FS.get("quality_mean"), FS.get("drift_speed_m_s"), a.gt_distance,
-                    FM.get("scale_err_pct_lidar_h"), FM.get("scale_err_pct_gt_h"), FM.get("direction_deg")])
+                    FM.get("scale_err_pct_lidar_h") if moved else None,
+                    FM.get("scale_err_pct_gt_h") if moved else None,
+                    FM.get("direction_deg") if moved else None,
+                    int(bool(L.get("usable_for_curve", False)))])
 
     # --- curva de error del LiDAR con todas las corridas
     pts = []
     with open(hist) as f:
         for r in csv.DictReader(f):
             try:
-                pts.append((float(r["gt_height_m"]), float(r["lidar_mean_m"])))
+                gt, mean = float(r["gt_height_m"]), float(r["lidar_mean_m"])
             except (TypeError, ValueError):
-                pass
+                continue
+            use = r.get("usable_for_curve")
+            if use in (None, ""):  # historial viejo sin la columna
+                use = abs(100 * (mean / gt - 1)) <= PLAUSIBLE_PCT
+            if str(use) in ("1", "True"):
+                pts.append((gt, mean))
     if len({round(p[0], 2) for p in pts}) >= 2:
         fit = fit_line([p[0] for p in pts], [p[1] for p in pts])
         if fit:
             k, b = fit
-            log(f"\nCURVA DEL LIDAR con {len(pts)} corridas a {len({round(p[0], 2) for p in pts})} alturas:")
+            log(f"\nCURVA DEL LIDAR con {len(pts)} corridas validas a {len({round(p[0], 2) for p in pts})} alturas:")
             log(f"  lectura = {k:.4f} x real {b:+.4f} m   (ideal: 1.0000 x real +0.0000)")
             for hh in (0.5, 1.0, 1.5, 2.0, 3.0):
                 log(f"    a {hh:.1f} m real el LiDAR diria {k * hh + b:.3f} m ({100 * ((k * hh + b) / hh - 1):+.1f}%)")
     else:
-        log("\nCURVA DEL LIDAR: repite la prueba a otra altura para ajustar escala + offset")
+        log(f"\nCURVA DEL LIDAR: {len(pts)} corrida(s) valida(s); hacen falta al menos 2 alturas distintas")
 
     log(f"\nGuardado: {base}.csv / .json  e historial {hist}")
     log("FIN")

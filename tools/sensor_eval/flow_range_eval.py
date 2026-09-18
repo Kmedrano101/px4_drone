@@ -32,6 +32,7 @@ PARAMS = ["SENS_FLOW_ROT", "SENS_FLOW_MINHGT", "SENS_FLOW_MAXHGT", "EKF2_OF_QMIN
           "EKF2_RNG_A_HMAX"]
 PLAUSIBLE_PCT = 25.0   # un error del LiDAR mayor que esto es casi seguro una altura mal introducida
 MIN_MOVE_FRAC = 0.2    # por debajo de este % del recorrido esperado, no hubo movimiento
+MIN_CURVE_SPAN_M = 0.3 # separacion minima entre alturas para ajustar la recta del LiDAR
 HIST_COLS = ["run_id", "gt_height_m", "lidar_mean_m", "lidar_std_m", "lidar_err_pct",
              "flow_q_still", "flow_drift_m_s", "gt_distance_m", "flow_scale_err_pct_lidar_h",
              "flow_scale_err_pct_gt_h", "flow_dir_deg", "usable_for_curve"]
@@ -137,6 +138,38 @@ def migrate_history(hist):
         w.writeheader()
         w.writerows(rows)
     log(f"(historial migrado al formato nuevo; copia del anterior en {hist}.bak)")
+
+
+def report_curve(hist):
+    """Ajusta lectura = k*real + b con las corridas utilizables del historial."""
+    pts = []
+    with open(hist) as f:
+        for r in csv.DictReader(f):
+            try:
+                gt, mean = float(r["gt_height_m"]), float(r["lidar_mean_m"])
+            except (TypeError, ValueError):
+                continue
+            use = r.get("usable_for_curve")
+            if use in (None, ""):  # historial viejo sin la columna
+                use = abs(100 * (mean / gt - 1)) <= PLAUSIBLE_PCT
+            if str(use) in ("1", "True"):
+                pts.append((gt, mean))
+    span = (max(p[0] for p in pts) - min(p[0] for p in pts)) if pts else 0.0
+    if len(pts) >= 2 and span < MIN_CURVE_SPAN_M:
+        log(f"\nCURVA DEL LIDAR: las alturas validas van de {min(p[0] for p in pts):.2f} a "
+            f"{max(p[0] for p in pts):.2f} m; hacen falta alturas separadas al menos {MIN_CURVE_SPAN_M:.1f} m "
+            "(el sensor mide en pasos de 1 cm: con alturas casi iguales la recta sale de ruido)")
+    elif len({round(p[0], 2) for p in pts}) >= 2:
+        fit = fit_line([p[0] for p in pts], [p[1] for p in pts])
+        if fit:
+            k, b = fit
+            log(f"\nCURVA DEL LIDAR con {len(pts)} corridas validas a {len({round(p[0], 2) for p in pts})} alturas:")
+            log(f"  lectura = {k:.4f} x real {b:+.4f} m   (ideal: 1.0000 x real +0.0000)")
+            for hh in (0.5, 1.0, 1.5, 2.0, 3.0):
+                log(f"    a {hh:.1f} m real el LiDAR diria {k * hh + b:.3f} m ({100 * ((k * hh + b) / hh - 1):+.1f}%)")
+    else:
+        log(f"\nCURVA DEL LIDAR: {len(pts)} corrida(s) valida(s); hacen falta al menos 2 alturas distintas")
+
 
 
 def main():
@@ -357,29 +390,7 @@ def main():
                     FM.get("direction_deg") if moved else None,
                     int(bool(L.get("usable_for_curve", False)))])
 
-    # --- curva de error del LiDAR con todas las corridas
-    pts = []
-    with open(hist) as f:
-        for r in csv.DictReader(f):
-            try:
-                gt, mean = float(r["gt_height_m"]), float(r["lidar_mean_m"])
-            except (TypeError, ValueError):
-                continue
-            use = r.get("usable_for_curve")
-            if use in (None, ""):  # historial viejo sin la columna
-                use = abs(100 * (mean / gt - 1)) <= PLAUSIBLE_PCT
-            if str(use) in ("1", "True"):
-                pts.append((gt, mean))
-    if len({round(p[0], 2) for p in pts}) >= 2:
-        fit = fit_line([p[0] for p in pts], [p[1] for p in pts])
-        if fit:
-            k, b = fit
-            log(f"\nCURVA DEL LIDAR con {len(pts)} corridas validas a {len({round(p[0], 2) for p in pts})} alturas:")
-            log(f"  lectura = {k:.4f} x real {b:+.4f} m   (ideal: 1.0000 x real +0.0000)")
-            for hh in (0.5, 1.0, 1.5, 2.0, 3.0):
-                log(f"    a {hh:.1f} m real el LiDAR diria {k * hh + b:.3f} m ({100 * ((k * hh + b) / hh - 1):+.1f}%)")
-    else:
-        log(f"\nCURVA DEL LIDAR: {len(pts)} corrida(s) valida(s); hacen falta al menos 2 alturas distintas")
+    report_curve(hist)
 
     log(f"\nGuardado: {base}.csv / .json  e historial {hist}")
     log("FIN")

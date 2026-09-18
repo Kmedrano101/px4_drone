@@ -53,7 +53,22 @@ el dron puede moverse reinicia el sector, y la velocidad sale de una regresión 
 ./run_scenario.sh preflight   # obstáculo a 0.6 m: NO arma
 ./run_scenario.sh approach    # pared a 1.2 m/s: frena a ~1.56 m y aterriza
 ./run_scenario.sh scanloss    # se corta /scan: frena a los 0.5 s y aterriza
+./run_scenario.sh slamlost    # la sigma del SLAM salta a 0.45 m en vuelo: aterriza
 ```
+
+## Salud del SLAM y varianza del EV (mismo día)
+
+- `takeoff_position_hold_ev` tampoco despega, y en vuelo aterriza, si `/pose` de slam_toolbox declara
+  **sigma > `slam_max_sigma_m` (0.3 m)** o no llega en **`slam_pose_timeout_s` (2.5 s)**.
+  En el bag del accidente: hover 0.06-0.10 m, perdido 0.41-0.48 m (desde t = 2.1 s). En vuelo hubo
+  huecos entre poses de hasta 1.2 s, y en tierra de 2.4 s: por eso el plazo es 2.5 s.
+- `ev_odometry_bridge` sigue a 20 Hz (el EKF deja el EV si pasan >200 ms entre muestras,
+  `EV_MAX_INTERVAL`), pero ahora cada muestra lleva **varianza = la del SLAM + (antigüedad de la pose
+  × `ev_max_speed_m_s`)²**: una pose recién calculada pesa (sigma ~0.13 m) y sus repeticiones cada
+  vez menos (1.3 m a los 0.9 s), así que entre poses manda el flujo óptico. z, roll y pitch van con
+  1e4, finitos: EKF2 solo usa las varianzas si las tres son finitas. Comprobación:
+  `../ev_bridge/check_variance.sh`. Si se baja `MPC_XY_VEL_MAX`, conviene bajar `ev_max_speed_m_s`
+  a algo por encima (defecto 1.5 m/s).
 
 `ROS_DOMAIN_ID=77` y solo localhost: el nodo publica ARM de verdad, y así no puede llegar al dron.
 

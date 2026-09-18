@@ -11,6 +11,7 @@ find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 include_directories(include)
 
@@ -62,7 +63,7 @@ add_executable(ev_odometry_bridge src/ev_odometry_bridge.cpp)
 target_include_directories(ev_odometry_bridge PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-ament_target_dependencies(ev_odometry_bridge rclcpp px4_msgs tf2_ros)
+ament_target_dependencies(ev_odometry_bridge rclcpp px4_msgs tf2_ros geometry_msgs)
 install(TARGETS ev_odometry_bridge DESTINATION lib/${PROJECT_NAME})
 
 add_executable(ev_offboard_handshake src/ev_offboard_handshake.cpp)
@@ -79,7 +80,7 @@ add_executable(takeoff_position_hold_ev
 target_include_directories(takeoff_position_hold_ev PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-ament_target_dependencies(takeoff_position_hold_ev rclcpp px4_msgs sensor_msgs)
+ament_target_dependencies(takeoff_position_hold_ev rclcpp px4_msgs sensor_msgs geometry_msgs)
 install(TARGETS takeoff_position_hold_ev DESTINATION lib/${PROJECT_NAME})
 
 # Reproduce barridos grabados a traves de ObstacleGuard, sin ROS: sirve para

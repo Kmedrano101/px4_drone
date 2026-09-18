@@ -6,6 +6,7 @@
 #include <limits>
 #include <memory>
 
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <px4_msgs/msg/vehicle_attitude.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 
@@ -25,6 +26,12 @@
 // distancia, y en vuelo frena y aterriza si un obstaculo se acerca tanto que
 // hay que empezar a frenar para quedar parado a esa distancia. Usa los
 // barridos crudos, no el SLAM ni la posicion del EKF: ver obstacle_guard.hpp.
+//
+// Salud del SLAM (2026-09-18): ademas de lo que dice el EKF, el nodo mira la
+// covarianza de /pose de slam_toolbox. En el vuelo del 2026-09-17 el SLAM
+// perdio el tracking y su sigma paso de <0.1 m (hover) a 0.4-0.5 m, pero el
+// EKF siguio con xy_valid = true. Con sigma > slam_max_sigma_m, o sin /pose
+// durante slam_pose_timeout_s, no despega; en vuelo, aterriza.
 class TakeoffPositionHoldEv : public TakeoffPositionHoldBase
 {
 public:
@@ -34,6 +41,12 @@ public:
     if (!okToRun()) {
       return;  // la base ya se nego (falta confirm_takeoff, parametros invalidos)
     }
+    slam_max_sigma_m_ = declare_parameter<double>("slam_max_sigma_m", 0.3);
+    slam_pose_timeout_s_ = declare_parameter<double>("slam_pose_timeout_s", 2.5);
+    pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+      declare_parameter<std::string>("pose_topic", "/pose"), rclcpp::QoS(10),
+      std::bind(&TakeoffPositionHoldEv::poseCallback, this, std::placeholders::_1));
+
     if (takeoffHeightM() > kMaxHeightM) {
       refuseToRun(
         "takeoff_height_m supera el techo fiable del lidar 1D (" +
@@ -91,18 +104,25 @@ protected:
   {
     const auto * lp = localPosition();
     return lp != nullptr && lp->xy_valid && lp->z_valid && lp->heading_good_for_control &&
-           !lp->dead_reckoning && std::isfinite(lp->eph) && lp->eph < kMaxEphM;
+           !lp->dead_reckoning && std::isfinite(lp->eph) && lp->eph < kMaxEphM &&
+           slamHealthy(nullptr);
   }
 
   std::string positionSourceName() const override
   {
     return "LiDAR 2D SLAM/EV + LiDAR 1D (vehicle_local_position: xy/z/heading_good_for_control validos, "
-           "!dead_reckoning, eph < 1.0 m)";
+           "!dead_reckoning, eph < 1.0 m; " +
+           fmt("SLAM con sigma < %.2f m y /pose reciente)", slam_max_sigma_m_);
   }
 
   bool positionSourceHealthyDuringFlight() const override
   {
     const auto * lp = localPosition();
+    std::string why;
+    if (!slamHealthy(&why)) {
+      RCLCPP_ERROR(get_logger(), "SLAM no sano en vuelo: %s", why.c_str());
+      return false;
+    }
     return lp != nullptr && lp->xy_valid && !lp->dead_reckoning;
   }
 
@@ -144,6 +164,48 @@ protected:
   }
 
 private:
+  void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+  {
+    const auto & c = msg->pose.covariance;
+    const double sigma = std::sqrt(std::max(c[0], c[7]));
+    if (!have_pose_) {
+      RCLCPP_INFO(get_logger(), "SLAM: primera /pose, sigma xy %.3f m (limite %.2f m)", sigma,
+        slam_max_sigma_m_);
+    } else if (std::isfinite(sigma) &&
+      (sigma > slam_max_sigma_m_) != (slam_sigma_m_ > slam_max_sigma_m_))
+    {
+      RCLCPP_WARN(
+        get_logger(), "SLAM: sigma xy %.3f m (%s del limite %.2f m)", sigma,
+        sigma > slam_max_sigma_m_ ? "por ENCIMA" : "de nuevo por debajo", slam_max_sigma_m_);
+    }
+    slam_sigma_m_ = std::isfinite(sigma) ? sigma : std::numeric_limits<double>::infinity();
+    last_pose_time_ = this->now();
+    have_pose_ = true;
+  }
+
+  // Salud del SLAM segun su propia covarianza y la frescura de /pose.
+  bool slamHealthy(std::string * reason) const
+  {
+    if (!have_pose_) {
+      if (reason) {*reason = "no ha llegado ninguna /pose del SLAM.";}
+      return false;
+    }
+    const double age = (this->now() - last_pose_time_).seconds();
+    if (age > slam_pose_timeout_s_) {
+      if (reason) {*reason = fmt("el SLAM no da pose desde hace %.1f s.", age);}
+      return false;
+    }
+    if (!(slam_sigma_m_ <= slam_max_sigma_m_)) {
+      if (reason) {
+        *reason = fmt(
+          "el SLAM declara sigma %.2f m (limite %.2f m): probablemente perdio el tracking.",
+          slam_sigma_m_, slam_max_sigma_m_);
+      }
+      return false;
+    }
+    return true;
+  }
+
   void scanCallback(const sensor_msgs::msg::LaserScan::SharedPtr msg)
   {
     const rclcpp::Time now = this->now();
@@ -215,6 +277,13 @@ private:
 
   static constexpr float kMaxHeightM = 1.2f;
   static constexpr float kMaxEphM = 1.0f;
+
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
+  bool have_pose_{false};
+  double slam_sigma_m_{std::numeric_limits<double>::infinity()};
+  rclcpp::Time last_pose_time_{0, 0, RCL_ROS_TIME};
+  double slam_max_sigma_m_{0.3};
+  double slam_pose_timeout_s_{2.5};
 
   std::unique_ptr<px4_drone::ObstacleGuard> guard_;  // nullptr = parada desactivada
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr scan_sub_;

@@ -9,6 +9,7 @@
 #include <tf2_ros/transform_listener.h>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/estimator_status_flags.hpp>
+#include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 
 #include "px4_drone/frame_transforms.hpp"
 
@@ -26,6 +27,18 @@
 // pose_jump_threshold_m) e incrementa reset_counter, que es la forma en que
 // VehicleOdometry le avisa al EKF2 que la muestra actual no es continua con
 // la anterior.
+//
+// Incertidumbre (2026-09-18): la tf se republica a publish_rate_hz porque el
+// EKF2 deja de fusionar el EV si entre dos muestras pasan mas de 200 ms
+// (EV_MAX_INTERVAL, ev_control.cpp:56), pero el SLAM solo actualiza la pose
+// ~1-2 veces por segundo. Antes cada muestra iba con varianza NaN (el EKF usa
+// EKF2_EVP_NOISE = 0.1 m), asi que una pose de hace 0.8 s pesaba como una
+// medida nueva, repetida 16 veces. Ahora la varianza es la que da el SLAM en
+// /pose mas lo que el dron puede haberse movido desde el barrido que la
+// produjo: cov + (antiguedad * ev_max_speed_m_s)^2. Una pose recien calculada
+// pesa; sus repeticiones cada vez menos, y entre poses manda el flujo optico.
+// Cuando el SLAM pierde el tracking su covarianza sube sola (x50 en el vuelo
+// del 2026-09-17) y el EKF deja de creerle. Ver el reporte del log 158.
 class EvOdometryBridge : public rclcpp::Node
 {
 public:
@@ -33,6 +46,7 @@ public:
 
 private:
   void onTimer();
+  void poseCallback(const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg);
   void estimatorStatusFlagsCallback(
     const px4_msgs::msg::EstimatorStatusFlags::SharedPtr msg);
 
@@ -40,6 +54,7 @@ private:
   rclcpp::Subscription<px4_msgs::msg::EstimatorStatusFlags>::SharedPtr
     estimator_status_flags_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
+  rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;
 
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
@@ -47,6 +62,15 @@ private:
   const std::string map_frame_;
   const std::string base_frame_;
   const float pose_jump_threshold_m_;
+  const float max_speed_m_s_;       // cota de lo que el dron se mueve mientras la pose envejece
+  const float max_yaw_rate_rad_s_;
+
+  // Ultima /pose del SLAM: varianzas en ENU (map) e instante del barrido.
+  bool have_pose_{false};
+  double pose_var_xx_enu_{0.0};
+  double pose_var_yy_enu_{0.0};
+  double pose_var_yaw_{0.0};
+  rclcpp::Time pose_stamp_{0, 0, RCL_ROS_TIME};
 
   bool tf_warning_logged_{false};
   std::optional<px4_drone::frames::Vec3> last_position_ned_;

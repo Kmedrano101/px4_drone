@@ -6,6 +6,8 @@ Escenarios (argv[1]):
   approach   - arma con todo libre (3 m); en vuelo una pared se acerca a 1.2 m/s por el
                morro: el nodo debe frenar (xy velocidad 0, posicion NaN) y luego pedir LAND
   scanloss   - arma con todo libre; en vuelo el /scan deja de llegar: debe frenar y LAND
+  slamlost   - arma con todo libre; en vuelo la sigma de /pose (SLAM) salta de 0.06 a 0.45 m,
+               como en el vuelo del 2026-09-17: debe aterrizar
 Imprime lo que el nodo comanda. Correr con ROS_DOMAIN_ID aislado.
 """
 import math, sys, time
@@ -13,6 +15,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import LaserScan
+from geometry_msgs.msg import PoseWithCovarianceStamped
 from px4_msgs.msg import (VehicleStatus, VehicleLocalPosition, VehicleAttitude, VehicleCommand,
                           TrajectorySetpoint, OffboardControlMode)
 
@@ -29,6 +32,7 @@ class MockFC(Node):
         self.lp_pub = self.create_publisher(VehicleLocalPosition, "/fmu/out/vehicle_local_position", be)
         self.att_pub = self.create_publisher(VehicleAttitude, "/fmu/out/vehicle_attitude", be)
         self.scan_pub = self.create_publisher(LaserScan, "/scan", 10)
+        self.pose_pub = self.create_publisher(PoseWithCovarianceStamped, "/pose", 10)
         self.create_subscription(VehicleCommand, "/fmu/in/vehicle_command", self.on_cmd, be_tl)
         self.create_subscription(TrajectorySetpoint, "/fmu/in/trajectory_setpoint", self.on_sp, be_tl)
         self.create_subscription(OffboardControlMode, "/fmu/in/offboard_control_mode", lambda m: None, be_tl)
@@ -42,6 +46,7 @@ class MockFC(Node):
         self.land_seen = False
         self.create_timer(0.02, self.tick_fc)     # 50 Hz
         self.create_timer(0.1, self.tick_scan)    # 10 Hz
+        self.create_timer(0.5, self.tick_pose)    # 2 Hz, como slam_toolbox en la Pi
 
     def log(self, s):
         print(f"[mock t={time.time() - self.t0:5.1f}s] {s}", flush=True)
@@ -102,6 +107,24 @@ class MockFC(Node):
         att.timestamp = now_us
         att.q = [1.0, 0.0, 0.0, 0.0]
         self.att_pub.publish(att)
+
+    def tick_pose(self):
+        ft = self.flight_time()
+        var = 0.004  # sigma 0.063 m, lo normal en hover
+        if SCEN == "slamlost" and ft is not None and ft > 2.0:
+            var = 0.2  # sigma 0.447 m
+            if not getattr(self, "_lost_logged", False):
+                self._lost_logged = True
+                self.log("SLAM PIERDE EL TRACKING: sigma 0.45 m")
+        m = PoseWithCovarianceStamped()
+        m.header.frame_id = "map"
+        m.header.stamp = self.get_clock().now().to_msg()
+        m.pose.pose.orientation.w = 1.0
+        cov = [0.0] * 36
+        cov[0] = cov[7] = var
+        cov[35] = 0.0001
+        m.pose.covariance = cov
+        self.pose_pub.publish(m)
 
     def tick_scan(self):
         ft = self.flight_time()

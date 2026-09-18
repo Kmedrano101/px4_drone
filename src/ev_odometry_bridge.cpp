@@ -1,5 +1,6 @@
 #include "px4_drone/ev_odometry_bridge.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -8,6 +9,12 @@
 using px4_msgs::msg::EstimatorStatusFlags;
 using px4_msgs::msg::VehicleOdometry;
 
+namespace
+{
+// Varianza para lo que el EV no mide (z, roll, pitch): enorme pero finita.
+constexpr float kUnmeasuredVariance = 1.0e4f;
+}  // namespace
+
 EvOdometryBridge::EvOdometryBridge()
 : Node("ev_odometry_bridge"),
   tf_buffer_(get_clock()),
@@ -15,7 +22,9 @@ EvOdometryBridge::EvOdometryBridge()
   map_frame_(declare_parameter<std::string>("map_frame", "map")),
   base_frame_(declare_parameter<std::string>("base_frame", "base_link")),
   pose_jump_threshold_m_(
-    static_cast<float>(declare_parameter<double>("pose_jump_threshold_m", 0.3)))
+    static_cast<float>(declare_parameter<double>("pose_jump_threshold_m", 0.3))),
+  max_speed_m_s_(static_cast<float>(declare_parameter<double>("ev_max_speed_m_s", 1.5))),
+  max_yaw_rate_rad_s_(static_cast<float>(declare_parameter<double>("ev_max_yaw_rate_rad_s", 0.8)))
 {
   const double publish_rate_hz = declare_parameter<double>("publish_rate_hz", 20.0);
   // Ver comentario equivalente en offboard_control.cpp: "" para firmware
@@ -37,6 +46,12 @@ EvOdometryBridge::EvOdometryBridge()
     "/fmu/out/estimator_status_flags" + v, status_qos,
     std::bind(&EvOdometryBridge::estimatorStatusFlagsCallback, this, std::placeholders::_1));
 
+  // /pose de slam_toolbox: solo llega cuando procesa un barrido, con el
+  // instante de ese barrido y su covarianza.
+  pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
+    declare_parameter<std::string>("pose_topic", "/pose"), rclcpp::QoS(10),
+    std::bind(&EvOdometryBridge::poseCallback, this, std::placeholders::_1));
+
   const auto period = std::chrono::duration<double>(1.0 / publish_rate_hz);
   timer_ = create_wall_timer(
     std::chrono::duration_cast<std::chrono::milliseconds>(period),
@@ -47,6 +62,34 @@ EvOdometryBridge::EvOdometryBridge()
     "ev_odometry_bridge iniciado: %s -> %s a %.0f Hz, publicando en vehicle_visual_odometry. "
     "No arma ni comanda el dron, solo puentea la pose del SLAM.",
     map_frame_.c_str(), base_frame_.c_str(), publish_rate_hz);
+}
+
+void EvOdometryBridge::poseCallback(
+  const geometry_msgs::msg::PoseWithCovarianceStamped::SharedPtr msg)
+{
+  const auto & c = msg->pose.covariance;  // 6x6 por filas: x, y, z, roll, pitch, yaw
+  if (!std::isfinite(c[0]) || !std::isfinite(c[7]) || !std::isfinite(c[35])) {
+    return;
+  }
+  const rclcpp::Time now = get_clock()->now();
+  rclcpp::Time stamp(msg->header.stamp, RCL_ROS_TIME);
+  // El sello es el del barrido (40-75 ms antes de llegar, medido en el bag del
+  // 2026-09-17). Si viene del futuro o absurdamente viejo, se usa la llegada.
+  const double lag = (now - stamp).seconds();
+  if (lag < -0.05 || lag > 2.0) {
+    stamp = now;
+  }
+  if (!have_pose_) {
+    RCLCPP_INFO(
+      get_logger(), "Primera /pose del SLAM: sigma xy %.3f m. Desde ahora la varianza del EV es "
+      "la del SLAM + (antiguedad x %.1f m/s)^2.", std::sqrt(std::max(c[0], c[7])),
+      static_cast<double>(max_speed_m_s_));
+  }
+  pose_var_xx_enu_ = c[0];
+  pose_var_yy_enu_ = c[7];
+  pose_var_yaw_ = c[35];
+  pose_stamp_ = stamp;
+  have_pose_ = true;
 }
 
 void EvOdometryBridge::onTimer()
@@ -124,8 +167,26 @@ void EvOdometryBridge::onTimer()
   msg.velocity_frame = VehicleOdometry::VELOCITY_FRAME_UNKNOWN;
   msg.velocity = {nan, nan, nan};
   msg.angular_velocity = {nan, nan, nan};
-  msg.position_variance = {nan, nan, nan};
-  msg.orientation_variance = {nan, nan, nan};
+  if (have_pose_) {
+    // EKF2.cpp:2106 y :2141 solo usan las varianzas si las TRES son finitas;
+    // si no, las tres pasan a EKF2_EVP_NOISE / EKF2_EVA_NOISE. Por eso z,
+    // roll y pitch (que el EV de un LiDAR 2D no mide y EKF2_EV_CTRL=9 no
+    // fusiona) van con una varianza enorme pero finita, no NaN.
+    const double age = std::max(0.0, (get_clock()->now() - pose_stamp_).seconds());
+    const double drift = age * static_cast<double>(max_speed_m_s_);
+    const double yaw_drift = age * static_cast<double>(max_yaw_rate_rad_s_);
+    // map es ENU y el mensaje NED: x_ned = y_enu, y_ned = x_enu.
+    msg.position_variance = {
+      static_cast<float>(pose_var_yy_enu_ + drift * drift),
+      static_cast<float>(pose_var_xx_enu_ + drift * drift),
+      kUnmeasuredVariance};
+    msg.orientation_variance = {
+      kUnmeasuredVariance, kUnmeasuredVariance,
+      static_cast<float>(pose_var_yaw_ + yaw_drift * yaw_drift)};
+  } else {
+    msg.position_variance = {nan, nan, nan};
+    msg.orientation_variance = {nan, nan, nan};
+  }
   msg.velocity_variance = {nan, nan, nan};
   msg.reset_counter = reset_counter_;
   msg.quality = -1;

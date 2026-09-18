@@ -35,6 +35,12 @@ def generate_launch_description():
         'hold_seconds', default_value='5.0',
         description='Segundos a mantener posicion antes de aterrizar.',
     )
+    obstacle_stop_arg = DeclareLaunchArgument(
+        'obstacle_stop_distance_m', default_value='1.0',
+        description=('Distancia (m) a la que el dron debe quedar parado de cualquier obstaculo, '
+                     'medida con el LiDAR 2D en 360 grados. 0 = desactivada. No arma si hay algo '
+                     'mas cerca; en vuelo frena y aterriza.'),
+    )
     run_bridge_arg = DeclareLaunchArgument(
         'run_bridge', default_value='true',
         description='Si es true, lanza tambien ev_odometry_bridge, slam y MicroXRCEAgent.',
@@ -67,6 +73,7 @@ def generate_launch_description():
             'confirm_takeoff': LaunchConfiguration('confirm_takeoff'),
             'takeoff_height_m': LaunchConfiguration('takeoff_height_m'),
             'hold_seconds': LaunchConfiguration('hold_seconds'),
+            'obstacle_stop_distance_m': LaunchConfiguration('obstacle_stop_distance_m'),
             'topic_version_suffix': LaunchConfiguration('topic_version_suffix'),
         }],
     )
@@ -75,6 +82,7 @@ def generate_launch_description():
         confirm_takeoff_arg,
         takeoff_height_arg,
         hold_seconds_arg,
+        obstacle_stop_arg,
         run_bridge_arg,
         topic_version_suffix_arg,
         bridge_launch,

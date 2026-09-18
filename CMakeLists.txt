@@ -10,6 +10,7 @@ find_package(ament_cmake_python REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(px4_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 include_directories(include)
 
@@ -73,12 +74,23 @@ install(TARGETS ev_offboard_handshake DESTINATION lib/${PROJECT_NAME})
 
 add_executable(takeoff_position_hold_ev
   src/takeoff_position_hold_ev.cpp
-  src/takeoff_position_hold_base.cpp)
+  src/takeoff_position_hold_base.cpp
+  src/obstacle_guard.cpp)
 target_include_directories(takeoff_position_hold_ev PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-ament_target_dependencies(takeoff_position_hold_ev rclcpp px4_msgs)
+ament_target_dependencies(takeoff_position_hold_ev rclcpp px4_msgs sensor_msgs)
 install(TARGETS takeoff_position_hold_ev DESTINATION lib/${PROJECT_NAME})
+
+# Reproduce barridos grabados a traves de ObstacleGuard, sin ROS: sirve para
+# validar la parada por obstaculo con rosbags reales antes de volar
+# (tools/obstacle_guard/bag_to_scans.py genera la entrada).
+add_executable(obstacle_guard_replay
+  src/obstacle_guard_replay.cpp
+  src/obstacle_guard.cpp)
+target_include_directories(obstacle_guard_replay PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+install(TARGETS obstacle_guard_replay DESTINATION lib/${PROJECT_NAME})
 
 install(DIRECTORY
   launch

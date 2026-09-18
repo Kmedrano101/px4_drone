@@ -17,6 +17,7 @@
 // Maquina de estados:
 //   kWaitPositionSource -> kWarmup -> kWaitRcOffboard -> kRequestOffboard
 //   -> kArm -> kTakeoff -> kHold -> [kPattern] -> kLand -> kFinished
+//   (kTakeoff/kHold/kPattern) -> kObstacleStop -> kLand   si obstacleTooClose()
 //
 // kWaitRcOffboard exige que el switch de modo del RC ya este puesto en
 // OFFBOARD (nav_state_user_intention) antes de pedir el cambio de modo: el
@@ -67,6 +68,22 @@ protected:
   // todavia tiene el control, tiene que soltarlo el mismo.
   virtual bool positionSourceHealthyDuringFlight() const {return true;}
 
+  // Parada por obstaculo. Default: sin sensor de obstaculos, nunca dispara.
+  // obstacleClearForTakeoff() se evalua justo antes de armar: si devuelve
+  // false, no se arma. obstacleTooClose() se evalua en cada ciclo de
+  // kTakeoff/kHold/kPattern: si devuelve true, el nodo frena (velocidad
+  // horizontal cero) y aterriza. En ambos, reason explica el motivo.
+  virtual bool obstacleClearForTakeoff(std::string * reason) const
+  {
+    (void)reason;
+    return true;
+  }
+  virtual bool obstacleTooClose(std::string * reason) const
+  {
+    (void)reason;
+    return false;
+  }
+
   const px4_msgs::msg::VehicleLocalPosition * localPosition() const
   {
     return last_local_position_.get();
@@ -96,6 +113,7 @@ private:
     kTakeoff,   // sube en linea recta desde el punto de armado hasta la altura objetivo
     kHold,      // mantiene esa posicion por hold_seconds_
     kPattern,   // recorre las 4 direcciones cardinales volviendo al centro entre cada una
+    kObstacleStop,  // frena (velocidad horizontal cero, altura mantenida) y despues aterriza
     kLand,      // entrega el aterrizaje a PX4 (VEHICLE_CMD_NAV_LAND) y espera el desarme
     kFinished
   };
@@ -123,6 +141,16 @@ private:
   // porque el control ya no es nuestro), aca el nodo todavia tiene el
   // control y es el que tiene que soltarlo mandando VEHICLE_CMD_NAV_LAND.
   void abortToLand(const std::string & reason);
+  // Deja de seguir el setpoint de posicion y frena en seco en horizontal. No
+  // usa la posicion del EKF a proposito: si el obstaculo aparece porque la
+  // posicion (EV/SLAM) miente, mantener "la posicion actual" seguiria
+  // arrastrando al dron. Ver obstacle_guard.hpp.
+  void enterObstacleStop(const std::string & reason);
+  void publishBrakeSetpoint();
+  // Chequeos de vuelo comunes a kTakeoff/kHold/kPattern. true = el estado
+  // cambio (control perdido, fuente de posicion caida u obstaculo) y el
+  // llamador tiene que salir del ciclo sin publicar nada mas.
+  bool flightChecksFailed();
   // Destino del tramo `leg` en NED. Los desplazamientos se definen en ejes del
   // CUERPO (adelante / derecha) y se giran con el yaw congelado del hold, para
   // que "adelante" sea hacia donde apunta el morro y no hacia el norte.
@@ -178,6 +206,10 @@ private:
   const float hold_seconds_;
   const float pattern_distance_m_;    // 0 = sin patron, se aterriza justo despues del hold
   const float pattern_settle_seconds_;  // pausa al llegar a cada punto, para que se estabilice
+  const float obstacle_brake_seconds_;  // frenado antes de pedir LAND tras un obstaculo
+
+  float brake_z_ned_{0.0f};  // altura a mantener mientras se frena
+  std::string obstacle_reason_;
 
   static constexpr float kLoopRateHz = 20.0f;
   static constexpr uint64_t kPositionSourceTimeoutCycles = 200;  // 10 s

@@ -22,7 +22,9 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
   pattern_distance_m_(static_cast<float>(
       declare_parameter<double>("pattern_distance_m", 0.0))),
   pattern_settle_seconds_(static_cast<float>(
-      declare_parameter<double>("pattern_settle_seconds", 3.0)))
+      declare_parameter<double>("pattern_settle_seconds", 3.0))),
+  obstacle_brake_seconds_(static_cast<float>(
+      declare_parameter<double>("obstacle_brake_seconds", 2.0)))
 {
   const bool confirm_takeoff = declare_parameter<bool>("confirm_takeoff", false);
   // Ver comentario equivalente en offboard_control.cpp: "" para firmware
@@ -188,6 +190,12 @@ void TakeoffPositionHoldBase::onTimer()
         }
 
         if (!arm_command_sent_ && cycle_count_ >= arm_wait_start_cycle_ + kArmDelayCycles) {
+          std::string why;
+          if (!obstacleClearForTakeoff(&why)) {
+            RCLCPP_ERROR(get_logger(), "NO SE ARMA: %s", why.c_str());
+            state_ = State::kFinished;
+            break;
+          }
           publishVehicleCommand(
             VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
             VehicleCommand::ARMING_ACTION_ARM);
@@ -231,12 +239,7 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kTakeoff: {
-        if (controlLostDuringFlight()) {
-          break;
-        }
-        if (!positionSourceHealthyDuringFlight()) {
-          abortToLand(
-            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
+        if (flightChecksFailed()) {
           break;
         }
         publishOffboardControlMode();
@@ -264,12 +267,7 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kHold: {
-        if (controlLostDuringFlight()) {
-          break;
-        }
-        if (!positionSourceHealthyDuringFlight()) {
-          abortToLand(
-            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
+        if (flightChecksFailed()) {
           break;
         }
         publishOffboardControlMode();
@@ -303,12 +301,7 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kPattern: {
-        if (controlLostDuringFlight()) {
-          break;
-        }
-        if (!positionSourceHealthyDuringFlight()) {
-          abortToLand(
-            "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
+        if (flightChecksFailed()) {
           break;
         }
         publishOffboardControlMode();
@@ -366,6 +359,20 @@ void TakeoffPositionHoldBase::onTimer()
             "Patron completo. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
           publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
           state_ = State::kLand;
+        }
+        break;
+      }
+
+    case State::kObstacleStop: {
+        // Solo se suelta el control con LAND si todavia es nuestro: si el
+        // piloto ya lo tomo, no se le pisa (vuelo 2, 2026-09-11).
+        if (controlLostDuringFlight()) {
+          break;
+        }
+        publishOffboardControlMode();
+        publishBrakeSetpoint();
+        if (cycle_count_ >= static_cast<uint64_t>(obstacle_brake_seconds_ * kLoopRateHz)) {
+          abortToLand("Frenado por obstaculo completado (" + obstacle_reason_ + ").");
         }
         break;
       }
@@ -570,6 +577,55 @@ void TakeoffPositionHoldBase::abortToLand(const std::string & reason)
   publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
   state_ = State::kLand;
   cycle_count_ = 0;
+}
+
+bool TakeoffPositionHoldBase::flightChecksFailed()
+{
+  if (controlLostDuringFlight()) {
+    return true;
+  }
+  if (!positionSourceHealthyDuringFlight()) {
+    abortToLand(
+      "Fuente de posicion (" + positionSourceName() + ") dejo de estar sana en vuelo.");
+    return true;
+  }
+  std::string why;
+  if (obstacleTooClose(&why)) {
+    enterObstacleStop(why);
+    return true;
+  }
+  return false;
+}
+
+void TakeoffPositionHoldBase::enterObstacleStop(const std::string & reason)
+{
+  const auto * lp = localPosition();
+  brake_z_ned_ = (lp != nullptr && std::isfinite(lp->z)) ? lp->z : target_z_ned_;
+  obstacle_reason_ = reason;
+  RCLCPP_ERROR(
+    get_logger(), "OBSTACULO: %s Frenando %.1f s (velocidad horizontal 0, altura mantenida) y "
+    "despues LAND.", reason.c_str(), obstacle_brake_seconds_);
+  state_ = State::kObstacleStop;
+  cycle_count_ = 0;
+  // Frenar en este mismo ciclo, sin esperar al siguiente.
+  publishOffboardControlMode();
+  publishBrakeSetpoint();
+}
+
+void TakeoffPositionHoldBase::publishBrakeSetpoint()
+{
+  // PositionControl.cpp (1.14.3): una componente de posicion en NaN no
+  // influye y manda la velocidad. XY: velocidad 0 sin posicion (no depende
+  // del EV). Z: posicion (baro + LiDAR 1D), que no tiene nada que ver con el
+  // obstaculo.
+  TrajectorySetpoint msg{};
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  msg.position = {nan, nan, brake_z_ned_};
+  msg.velocity = {0.0f, 0.0f, nan};
+  msg.acceleration = {nan, nan, nan};
+  msg.yaw = target_yaw_ned_;
+  trajectory_setpoint_pub_->publish(msg);
 }
 
 void TakeoffPositionHoldBase::vehicleLocalPositionCallback(

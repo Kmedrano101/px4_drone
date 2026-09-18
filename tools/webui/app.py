@@ -75,7 +75,7 @@ TESTS = {
     },
     "cross_pattern": {
         "label": "Patrón cruz LiDAR 2D (4 direcciones)",
-        "desc": "Lanza LD19 + slam_toolbox + puente EV. Despega a 1 m con LiDAR 1D + baro, recorre adelante/atras/izquierda/derecha volviendo al centro en cada tramo con SLAM 2D, y aterriza solo. Techo 1.2 m. VUELO REAL (espacio libre minimo 3x3 m).",
+        "desc": "Lanza LD19 + slam_toolbox + puente EV. Despega a 1 m con LiDAR 1D + baro, recorre adelante/atras/izquierda/derecha volviendo al centro en cada tramo con SLAM 2D, y aterriza solo. Techo 1.2 m. Si un obstaculo (LiDAR 2D, 360 grados) se acerca a la distancia de parada, frena y aterriza; no arma si ya hay algo mas cerca. VUELO REAL (espacio libre minimo 3x3 m).",
         "launch_file": "cross_pattern_ev.launch.py",
         "needs_confirm_takeoff": True,
         "params": [
@@ -83,6 +83,7 @@ TESTS = {
             {"key": "hold_seconds", "label": "Hold antes del patron (s)", "default": 5.0, "min": 2, "max": 60, "step": 1},
             {"key": "pattern_distance_m", "label": "Distancia por tramo (m)", "default": 1.0, "min": 0.2, "max": 2.0, "step": 0.1},
             {"key": "pattern_settle_seconds", "label": "Pausa en cada punto (s)", "default": 3.0, "min": 1, "max": 15, "step": 0.5},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
     "ev_handshake": {
@@ -109,12 +110,13 @@ TESTS = {
     },
     "ev_takeoff": {
         "label": "Ciclo completo LiDAR 2D + 1D",
-        "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.2 m. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
+        "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.2 m. Parada por obstaculo con el LiDAR 2D (360 grados): frena y aterriza si algo se acerca a esa distancia. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
         "launch_file": "takeoff_position_hold_ev.launch.py",
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
             {"key": "hold_seconds", "label": "Hold (s)", "default": 5.0, "min": 2, "max": 60, "step": 1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
 }

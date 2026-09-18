@@ -34,6 +34,12 @@ TOPIC_VERSION_SUFFIX = ""  # firmware v1.14, ver docstring arriba
 SCRIPT_PY = "/home/kevin/.venvs/mav/bin/python"
 TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 
+# Carga de la Pi (CPU por nucleo, RAM, temperatura, throttling, procesos, tasas
+# /scan y /pose) durante cada prueba, para decidir si hace falta otro ordenador.
+# Deja logs/<run_id>_sysmon.csv y _sysmon_resumen.txt, y agrega el resumen al
+# final del log de la prueba. Ver tools/sysmon/sysmon.py.
+SYSMON = os.path.join(TOOLS_DIR, "sysmon", "sysmon.py")
+
 app = Flask(__name__)
 
 TESTS = {
@@ -132,25 +138,47 @@ _state = {
     "started_at": None,
     "bag_proc": None,
     "bag_path": None,
+    "sysmon_proc": None,
 }
 
 
-def _stop_bag_locked():
-    """Para la grabacion de ros2 bag del test actual, si hay una corriendo.
-    Se llama tanto desde /api/stop como cuando /api/status detecta que el
-    test principal ya termino solo -- grabar despues de eso no sirve de
-    nada y deja el proceso de bag colgado."""
-    bag_proc = _state["bag_proc"]
-    if bag_proc is not None and bag_proc.poll() is None:
+def _stop_group(proc):
+    """SIGINT al grupo del proceso (para que cierre limpio) y SIGKILL si no sale."""
+    if proc is not None and proc.poll() is None:
         try:
-            os.killpg(os.getpgid(bag_proc.pid), signal.SIGINT)
-            bag_proc.wait(timeout=5)
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            proc.wait(timeout=5)
         except (subprocess.TimeoutExpired, ProcessLookupError):
             try:
-                os.killpg(os.getpgid(bag_proc.pid), signal.SIGKILL)
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+def _stop_bag_locked():
+    """Para la grabacion de ros2 bag y el monitor de carga del test actual, si
+    hay. Se llama tanto desde /api/stop como cuando /api/status detecta que el
+    test principal ya termino solo -- grabar despues de eso no sirve de
+    nada y deja los procesos colgados. El monitor escribe su resumen al parar."""
+    _stop_group(_state["bag_proc"])
     _state["bag_proc"] = None
+    _stop_group(_state["sysmon_proc"])
+    _state["sysmon_proc"] = None
+
+
+def _start_sysmon(run_id, log_path):
+    cmd = (
+        f"source /opt/ros/jazzy/setup.bash && "
+        f"source {EXTRA_WS}/install/setup.bash && "
+        f"source {WORKSPACE}/install/setup.bash && "
+        f"export ROS_DOMAIN_ID=0 && "
+        f"exec /usr/bin/python3 {shlex.quote(SYSMON)} --ros-rates "
+        f"--out {shlex.quote(os.path.join(LOG_DIR, run_id + '_sysmon.csv'))} "
+        f"--append-to {shlex.quote(log_path)}"
+    )
+    err = open(os.path.join(LOG_DIR, f"{run_id}_sysmon.log"), "w")
+    return subprocess.Popen(["bash", "-c", cmd], stdout=subprocess.DEVNULL, stderr=err,
+                            cwd=WORKSPACE, preexec_fn=os.setsid)
 
 
 def _build_script_command(test):
@@ -286,6 +314,7 @@ def launch():
         bag_proc = None
         if test.get("record_bag", True):
             bag_path, bag_proc = _start_bag(run_id)
+        sysmon_proc = _start_sysmon(run_id, log_path) if os.path.exists(SYSMON) else None
 
         _state["test_id"] = test_id
         _state["proc"] = proc
@@ -293,6 +322,7 @@ def launch():
         _state["started_at"] = time.time()
         _state["bag_proc"] = bag_proc
         _state["bag_path"] = bag_path
+        _state["sysmon_proc"] = sysmon_proc
 
         return jsonify({"ok": True, "test_id": test_id, "cmd": cmd_str, "bag_path": bag_path})
 

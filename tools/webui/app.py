@@ -42,6 +42,30 @@ TOOLS_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # final del log de la prueba. Ver tools/sysmon/sysmon.py.
 SYSMON = os.path.join(TOOLS_DIR, "sysmon", "sysmon.py")
 
+# Donde colcon instala los launch del paquete. Se comprueba ANTES de ofrecer o
+# lanzar cada test: durante un `colcon build` este directorio se queda vacio, y
+# lanzar entonces daba el error "<launch> was not found in the share directory",
+# que no dice que lo que falta es la compilacion.
+LAUNCH_SHARE = os.path.join(WORKSPACE, "install", "px4_drone", "share", "px4_drone", "launch")
+
+
+def _test_unavailable_reason(test):
+    """None si el test se puede lanzar; si no, por que no."""
+    script = test.get("script")
+    if script:
+        return None if os.path.exists(script) else f"falta el script {os.path.basename(script)}"
+    lf = test.get("launch_file")
+    if not lf:
+        return "test sin launch_file ni script"
+    if not os.path.exists(os.path.join(LAUNCH_SHARE, lf)):
+        return (f"{lf} no esta instalado. Compila el paquete y espera a que termine: "
+                "colcon build --packages-select px4_drone")
+    exe = test.get("node_exe")
+    if exe and not os.path.exists(os.path.join(WORKSPACE, "install", "px4_drone", "lib",
+                                                "px4_drone", exe)):
+        return f"el ejecutable {exe} no esta instalado (compilacion incompleta)"
+    return None
+
 app = Flask(__name__)
 
 TESTS = {
@@ -234,7 +258,13 @@ def _build_command(test):
 
 @app.route("/")
 def index():
-    return render_template("index.html", tests=TESTS)
+    # Se anota cada test con si se puede lanzar ahora mismo, para que la pagina
+    # no ofrezca botones que van a fallar.
+    tests = {}
+    for tid, t in TESTS.items():
+        reason = _test_unavailable_reason(t)
+        tests[tid] = dict(t, available=reason is None, unavailable_reason=reason or "")
+    return render_template("index.html", tests=tests)
 
 
 @app.route("/api/status")
@@ -295,6 +325,10 @@ def launch():
 
     if test["needs_confirm_takeoff"] and not body.get("confirm_takeoff"):
         return jsonify({"error": "Este test despega de verdad: falta confirmar confirm_takeoff"}), 400
+
+    reason = _test_unavailable_reason(test)
+    if reason is not None:
+        return jsonify({"error": f"No se puede lanzar: {reason}"}), 409
 
     with _lock:
         if _state["proc"] is not None and _state["proc"].poll() is None:

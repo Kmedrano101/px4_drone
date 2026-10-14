@@ -121,6 +121,10 @@
     </div>
     {% endif %}
 
+    {% if not t.available %}
+    <p class="desc" style="color:#e67e22">⚠ No disponible: {{ t.unavailable_reason }}</p>
+    {% endif %}
+
     <button class="launch-btn" id="{{ id }}-launch" onclick="launchTest('{{ id }}')">
       Lanzar
     </button>
@@ -195,7 +199,7 @@ function updateButtons() {
   for (const id in TESTS) {
     const t = TESTS[id];
     const btn = document.getElementById(`${id}-launch`);
-    let ok = !lastRunning;
+    let ok = !lastRunning && t.available !== false;
     if (t.needs_confirm_takeoff) {
       const box = document.getElementById(`${id}-confirm`);
       if (!box.checked) ok = false;

@@ -263,7 +263,7 @@ void TakeoffPositionHoldBase::onTimer()
           break;
         }
         publishOffboardControlMode();
-        publishTrajectorySetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
+        emitTrackingSetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
         if (cycle_count_ == 1) {
           RCLCPP_INFO(get_logger(), "Subiendo a la altura objetivo...");
         }
@@ -291,7 +291,7 @@ void TakeoffPositionHoldBase::onTimer()
           break;
         }
         publishOffboardControlMode();
-        publishTrajectorySetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
+        emitTrackingSetpoint(target_x_ned_, target_y_ned_, target_z_ned_, target_yaw_ned_);
         if (cycle_count_ == 1) {
           RCLCPP_INFO(get_logger(), "Manteniendo posicion por %.0f s...", hold_seconds_);
         }
@@ -310,11 +310,7 @@ void TakeoffPositionHoldBase::onTimer()
             pattern_arrived_ = false;
             cycle_count_ = 0;
           } else {
-            RCLCPP_INFO(
-              get_logger(), "Fin del hold. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
-            publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
-            state_ = State::kLand;
-            cycle_count_ = 0;
+            startLandingSequence("Fin del hold.");
           }
         }
         break;
@@ -329,7 +325,7 @@ void TakeoffPositionHoldBase::onTimer()
         float leg_x_ned = 0.0f;
         float leg_y_ned = 0.0f;
         patternTargetNed(pattern_leg_, &leg_x_ned, &leg_y_ned);
-        publishTrajectorySetpoint(leg_x_ned, leg_y_ned, target_z_ned_, target_yaw_ned_);
+        emitTrackingSetpoint(leg_x_ned, leg_y_ned, target_z_ned_, target_yaw_ned_);
 
         if (cycle_count_ == 1) {
           RCLCPP_INFO(
@@ -374,11 +370,7 @@ void TakeoffPositionHoldBase::onTimer()
         cycle_count_ = 0;
 
         if (pattern_leg_ >= patternLegCount()) {
-          RCLCPP_INFO(
-            get_logger(),
-            "Patron completo. Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...");
-          publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
-          state_ = State::kLand;
+          startLandingSequence("Patron completo.");
         }
         break;
       }
@@ -419,9 +411,34 @@ void TakeoffPositionHoldBase::onTimer()
           }
           break;
         }
-        publishTrajectorySetpoint(user_hold_x_ned_, user_hold_y_ned_, brake_z_ned_, target_yaw_ned_);
+        emitTrackingSetpoint(user_hold_x_ned_, user_hold_y_ned_, brake_z_ned_, target_yaw_ned_);
         if (cycle_count_ >= static_cast<uint64_t>(user_hold_timeout_s_ * kLoopRateHz)) {
           abortToLand(fmtHoldTimeout());
+        }
+        break;
+      }
+
+    case State::kControlledDescent: {
+        if (flightChecksFailed()) {
+          break;
+        }
+        publishOffboardControlMode();
+        const float z_objetivo = origin_z_ned_ - controlledDescentAgl();
+        emitTrackingSetpoint(user_hold_x_ned_, user_hold_y_ned_, z_objetivo, target_yaw_ned_);
+        const auto * lp = localPosition();
+        const bool altura_alcanzada = lp != nullptr &&
+          (lp->z >= z_objetivo - kDescentReachedM ||
+          (lp->dist_bottom_valid && lp->dist_bottom <= controlledDescentAgl() + kDescentReachedM));
+        if (altura_alcanzada || cycle_count_ >= kDescentTimeoutCycles) {
+          RCLCPP_INFO(
+            get_logger(),
+            altura_alcanzada ?
+            "Descenso controlado hasta %.2f m del suelo. Entregando el contacto a PX4 (NAV_LAND)." :
+            "Descenso controlado sin confirmar %.2f m en 30 s. Entregando a PX4 (NAV_LAND).",
+            controlledDescentAgl());
+          publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
+          state_ = State::kLand;
+          cycle_count_ = 0;
         }
         break;
       }
@@ -505,16 +522,22 @@ void TakeoffPositionHoldBase::patternTargetNed(size_t leg, float * ned_x, float 
   *ned_y = center_y_ned_ + adelante * s + derecha * c;
 }
 
-void TakeoffPositionHoldBase::publishOffboardControlMode()
+void TakeoffPositionHoldBase::publishOffboardControlModeFlags(
+  bool position, bool velocity, bool acceleration)
 {
   OffboardControlMode msg{};
   msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
-  msg.position = true;
-  msg.velocity = false;
-  msg.acceleration = false;
+  msg.position = position;
+  msg.velocity = velocity;
+  msg.acceleration = acceleration;
   msg.attitude = false;
   msg.body_rate = false;
   offboard_control_mode_pub_->publish(msg);
+}
+
+void TakeoffPositionHoldBase::publishOffboardControlMode()
+{
+  publishOffboardControlModeFlags(/*position=*/true, false, false);
 }
 
 void TakeoffPositionHoldBase::publishTrajectorySetpoint(
@@ -526,6 +549,26 @@ void TakeoffPositionHoldBase::publishTrajectorySetpoint(
   msg.position = {ned_x, ned_y, ned_z};
   msg.velocity = {nan, nan, nan};
   msg.acceleration = {nan, nan, nan};
+  msg.yaw = yaw_ned;
+  trajectory_setpoint_pub_->publish(msg);
+}
+
+void TakeoffPositionHoldBase::emitTrackingSetpoint(
+  float ned_x, float ned_y, float ned_z, float yaw_ned)
+{
+  // Por defecto: setpoint de posicion, lo cierra la cascada P/PID de PX4.
+  publishTrajectorySetpoint(ned_x, ned_y, ned_z, yaw_ned);
+}
+
+void TakeoffPositionHoldBase::publishAccelerationSetpoint(
+  float ned_ax, float ned_ay, float ned_az, float yaw_ned)
+{
+  TrajectorySetpoint msg{};
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  const float nan = std::numeric_limits<float>::quiet_NaN();
+  msg.position = {nan, nan, nan};
+  msg.velocity = {nan, nan, nan};
+  msg.acceleration = {ned_ax, ned_ay, ned_az};
   msg.yaw = yaw_ned;
   trajectory_setpoint_pub_->publish(msg);
 }
@@ -618,6 +661,26 @@ bool TakeoffPositionHoldBase::controlLostDuringFlight()
     return true;
   }
   return false;
+}
+
+void TakeoffPositionHoldBase::startLandingSequence(const std::string & motivo)
+{
+  const float agl = controlledDescentAgl();
+  if (agl > 0.0f) {
+    // El controlador baja hasta agl metros del suelo y solo entonces entrega el
+    // contacto a PX4, que tiene detector de aterrizaje y desarma.
+    user_hold_x_ned_ = target_x_ned_;
+    user_hold_y_ned_ = target_y_ned_;
+    RCLCPP_INFO(
+      get_logger(), "%s Descenso controlado hasta %.2f m del suelo...", motivo.c_str(), agl);
+    state_ = State::kControlledDescent;
+  } else {
+    RCLCPP_INFO(
+      get_logger(), "%s Solicitando aterrizaje (VEHICLE_CMD_NAV_LAND)...", motivo.c_str());
+    publishVehicleCommand(VehicleCommand::VEHICLE_CMD_NAV_LAND);
+    state_ = State::kLand;
+  }
+  cycle_count_ = 0;
 }
 
 void TakeoffPositionHoldBase::abortToLand(const std::string & reason)

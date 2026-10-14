@@ -49,6 +49,16 @@
 // Los setpoints se definen en variables ENU (convencion ROS 2, REP-103) y se
 // convierten a NED (convencion PX4) justo antes de publicarlos, usando
 // px4_drone::frames.
+//
+// COMO SE GENERA EL SETPOINT (punto de extension para el MPC): la maquina de
+// estados no publica directamente, llama a emitTrackingSetpoint() /
+// publishBrakeSetpoint() / publishOffboardControlMode(), que son virtuales. Por
+// defecto emiten un setpoint de POSICION y PX4 cierra el lazo con su cascada
+// P/PID. takeoff_hold_land_mpc los sobreescribe para resolver un MPC y emitir
+// ACELERACION (con posicion y velocidad en NaN), con lo que PX4 apaga sus lazos
+// de posicion y velocidad (control_mode.cpp) y el MPC pasa a ser el controlador
+// exterior. Mision, guardas y registro son identicos en los dos: esa es la
+// condicion para que la comparacion PID vs MPC signifique algo.
 class TakeoffPositionHoldBase : public rclcpp::Node
 {
 public:
@@ -92,6 +102,45 @@ protected:
     return false;
   }
 
+  // --- Generacion del setpoint. Virtuales: ver la nota de arriba.
+  // Setpoint para ir/mantenerse en (NED x, y, z) con ese yaw.
+  virtual void emitTrackingSetpoint(float ned_x, float ned_y, float ned_z, float yaw_ned);
+  // Frenado: parar en horizontal manteniendo la altura.
+  virtual void publishBrakeSetpoint();
+  // Que lazos de PX4 se usan (position por defecto; el MPC pide acceleration).
+  virtual void publishOffboardControlMode();
+  // Lo que se publica antes de armar, mientras se calienta el enlace offboard.
+  virtual void publishHoldCurrentPosition();
+
+  // Publica un setpoint de POSICION (lo que usa el controlador por defecto).
+  void publishTrajectorySetpoint(float ned_x, float ned_y, float ned_z, float yaw_ned);
+
+  // Descenso controlado antes del aterrizaje: metros sobre el suelo a los que
+  // el controlador baja el dron antes de entregar el contacto a PX4
+  // (VEHICLE_CMD_NAV_LAND, que tiene detector de aterrizaje y desarma). 0 = no
+  // hay descenso controlado, se entrega a PX4 desde la altura de vuelo, que es
+  // lo que hace el nodo PID.
+  virtual float controlledDescentAgl() const {return 0.0f;}
+
+  // Aterrizaje forzado (lo usan las subclases cuando su controlador falla).
+  void abortToLand(const std::string & reason);
+
+  // Publica el heartbeat de offboard pidiendo esos lazos. PX4 decide con esto
+  // que controladores activa (control_mode.cpp).
+  void publishOffboardControlModeFlags(bool position, bool velocity, bool acceleration);
+
+  // Publica un setpoint de ACELERACION (NED, m/s^2) con posicion y velocidad en
+  // NaN. En PX4 1.14.3 una componente NaN no influye (PositionControl.cpp) y,
+  // con offboard_control_mode.acceleration, los lazos de posicion y velocidad
+  // quedan desactivados: el que controla es quien manda la aceleracion.
+  void publishAccelerationSetpoint(float ned_ax, float ned_ay, float ned_az, float yaw_ned);
+
+  // Altura objetivo (NED) y yaw congelado de la fase actual, para las subclases.
+  float targetZNed() const {return target_z_ned_;}
+  float targetYawNed() const {return target_yaw_ned_;}
+  float originZNed() const {return origin_z_ned_;}
+  float brakeZNed() const {return brake_z_ned_;}
+
   const px4_msgs::msg::VehicleLocalPosition * localPosition() const
   {
     return last_local_position_.get();
@@ -123,14 +172,12 @@ private:
     kPattern,   // recorre las 4 direcciones cardinales volviendo al centro entre cada una
     kObstacleStop,  // frena (velocidad horizontal cero, altura mantenida) y despues aterriza
     kUserHold,      // HOLD pedido desde la webui: frena y se queda quieto hasta ATERRIZAR o timeout
+    kControlledDescent,  // baja con el propio controlador hasta controlledDescentAgl() y entrega a PX4
     kLand,      // entrega el aterrizaje a PX4 (VEHICLE_CMD_NAV_LAND) y espera el desarme
     kFinished
   };
 
   void onTimer();
-  void publishOffboardControlMode();
-  void publishTrajectorySetpoint(float ned_x, float ned_y, float ned_z, float yaw_ned);
-  void publishHoldCurrentPosition();
   void publishVehicleCommand(
     uint16_t command, float param1 = 0.0f, float param2 = 0.0f, float param4 = 0.0f,
     float param5 = 0.0f, float param6 = 0.0f, float param7 = 0.0f);
@@ -145,21 +192,20 @@ private:
   // disparo el failsafe desaparece (ver reporte de vuelo real 2026-09-11,
   // "riesgo grave: reentrada automatica en OFFBOARD").
   bool controlLostDuringFlight();
-  // Aterrizaje forzado por positionSourceHealthyDuringFlight() == false: a
-  // diferencia de controlLostDuringFlight() (que solo deja de publicar
-  // porque el control ya no es nuestro), aca el nodo todavia tiene el
-  // control y es el que tiene que soltarlo mandando VEHICLE_CMD_NAV_LAND.
-  void abortToLand(const std::string & reason);
+  // Pide NAV_LAND y pasa a kLand. Comentario historico: a diferencia de
+  // controlLostDuringFlight() (que solo deja de publicar porque el control ya
+  // no es nuestro), aca el nodo todavia tiene el control y lo suelta el mismo.
   // Deja de seguir el setpoint de posicion y frena en seco en horizontal. No
   // usa la posicion del EKF a proposito: si el obstaculo aparece porque la
   // posicion (EV/SLAM) miente, mantener "la posicion actual" seguiria
   // arrastrando al dron. Ver obstacle_guard.hpp.
   void enterObstacleStop(const std::string & reason);
-  void publishBrakeSetpoint();
   // Aplica un pedido pendiente de la webui (SIGUSR1/SIGUSR2). true = el
   // estado cambio y el ciclo actual no debe seguir.
   bool handleUserRequest();
   void enterUserHold();
+  // Fin de mision: descenso controlado si la subclase lo pide, o NAV_LAND.
+  void startLandingSequence(const std::string & motivo);
   std::string fmtHoldTimeout() const;
   // Chequeos de vuelo comunes a kTakeoff/kHold/kPattern. true = el estado
   // cambio (control perdido, fuente de posicion caida u obstaculo) y el
@@ -241,6 +287,9 @@ private:
   static constexpr uint64_t kLandTimeoutCycles = 1200;           // 60 s max esperando desarme
   static constexpr float kPatternToleranceM = 0.20f;             // radio para dar un tramo por alcanzado
   static constexpr uint64_t kPatternLegTimeoutCycles = 240;      // 12 s max por tramo
+
+  static constexpr uint64_t kDescentTimeoutCycles = 600;  // 30 s bajando: algo va mal
+  static constexpr float kDescentReachedM = 0.10f;       // margen para dar la altura por alcanzada
 
   static constexpr float kUserHoldBrakeSeconds = 1.0f;  // frenado antes de fijar el punto de hold
 

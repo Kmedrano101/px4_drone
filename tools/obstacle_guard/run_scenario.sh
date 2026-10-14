@@ -1,5 +1,5 @@
 #!/bin/bash
-# $1 = preflight | approach | scanloss | slamlost | userhold | cancel. Aislado: ROS_DOMAIN_ID 77 y solo localhost,
+# $1 = preflight | approach | scanloss | slamlost | userhold | cancel | cycle. Aislado: ROS_DOMAIN_ID 77 y solo localhost,
 # porque el nodo publica ARM de verdad: nada de esto puede llegar al dron.
 D=$(cd "$(dirname "$0")" && pwd)
 WS=${WS:-$HOME/drone_ws}
@@ -7,7 +7,9 @@ export PATH=/usr/bin:/bin ROS_DOMAIN_ID=77 ROS_LOCALHOST_ONLY=1 ROS_AUTOMATIC_DI
 source /opt/ros/jazzy/setup.bash; source $WS/install/setup.bash
 python3 $D/mock_fc.py $1 > /tmp/mock_$1.log 2>&1 &
 MOCK=$!
-NODE=$WS/install/px4_drone/lib/px4_drone/takeoff_position_hold_ev
+# NODE_EXE permite probar el mismo escenario con el otro controlador:
+#   NODE_EXE=takeoff_hold_land_mpc ./run_scenario.sh cycle
+NODE=$WS/install/px4_drone/lib/px4_drone/${NODE_EXE:-takeoff_position_hold_ev}
 case $1 in
   userhold)
     # Patron en cruz; HOLD en pleno tramo (el tramo 1 empieza ~2 s tras armar) y ATERRIZAR 5 s despues.
@@ -19,6 +21,9 @@ case $1 in
     sleep 12.5; pkill -USR1 -x takeoff_positio; echo "[runner] HOLD (SIGUSR1) enviado"
     sleep 5; pkill -USR2 -x takeoff_positio; echo "[runner] ATERRIZAR (SIGUSR2) enviado"
     wait $N ;;
+  cycle)
+    timeout 60 $NODE --ros-args -p confirm_takeoff:=true -p takeoff_height_m:=1.0 \
+      -p hold_seconds:=4.0 -p obstacle_stop_distance_m:=1.0 > /tmp/node_$1.log 2>&1 ;;
   cancel)
     timeout 40 $NODE --ros-args -p confirm_takeoff:=true -p hold_seconds:=20.0 > /tmp/node_$1.log 2>&1 &
     N=$!
@@ -29,5 +34,5 @@ case $1 in
       > /tmp/node_$1.log 2>&1 ;;
 esac
 wait $MOCK
-echo "--- nodo (/tmp/node_$1.log):"; grep -E "NO SE ARMA|OBSTACULO|Aterrizando|ARMADO|SLAM no|HOLD|Tramo|cancelada" /tmp/node_$1.log
+echo "--- nodo (/tmp/node_$1.log):"; grep -E "NO SE ARMA|OBSTACULO|Aterriz|ARMADO|SLAM no|HOLD|Tramo|cancelada|MPC|Descenso|altura|Fin del hold" /tmp/node_$1.log
 echo "--- FC falso (/tmp/mock_$1.log):"; grep "mock t" /tmp/mock_$1.log

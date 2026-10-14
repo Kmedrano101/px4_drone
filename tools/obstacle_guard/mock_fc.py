@@ -11,6 +11,9 @@ Escenarios (argv[1]):
   userhold   - patron en cruz; run_scenario.sh manda HOLD (SIGUSR1) en pleno tramo y despues
                ATERRIZAR (SIGUSR2): debe frenar, quedarse quieto y aterrizar
   cancel     - run_scenario.sh manda HOLD antes de armar: no debe armar
+  cycle      - ciclo completo sin incidencias: arm, takeoff, hold, descenso, land, disarm.
+               Sirve para los dos controladores: con NODE_EXE=takeoff_hold_land_mpc se prueba
+               el MPC (que manda ACELERACION) y con el valor por defecto el PID (posicion).
 Imprime lo que el nodo comanda. Correr con ROS_DOMAIN_ID aislado.
 """
 import math, sys, time
@@ -44,6 +47,7 @@ class MockFC(Node):
         self.t0 = time.time()
         self.t_arm = None
         self.z = 0.0
+        self.vz = 0.0
         self.last_sp = None
         self.braking_seen = False
         self.pattern_seen = False
@@ -97,8 +101,17 @@ class MockFC(Node):
         self.st_pub.publish(st)
         if self.armed and self.nav == VehicleStatus.NAVIGATION_STATE_OFFBOARD and self.last_sp is not None:
             tz = float(self.last_sp.position[2])
+            az = float(self.last_sp.acceleration[2])
             if not math.isnan(tz):
                 self.z += max(-0.02, min(0.02, tz - self.z))  # sube a ~1 m/s
+                self.vz = 0.0
+            elif not math.isnan(az):
+                # Setpoint de aceleracion (MPC): doble integrador en z. No es un
+                # modelo del dron, solo lo justo para validar el ciclo completo.
+                self.vz += az * 0.02
+                self.z = min(0.0, self.z + self.vz * 0.02)
+                if self.z >= 0.0:
+                    self.vz = 0.0
         if self.nav == VehicleStatus.NAVIGATION_STATE_AUTO_LAND and self.armed:
             self.z = min(0.0, self.z + 0.02)
             if self.z >= -0.01:
@@ -108,6 +121,7 @@ class MockFC(Node):
         lp.timestamp = now_us
         lp.x = lp.y = 0.0
         lp.z = float(self.z)
+        lp.vz = float(self.vz)
         lp.heading = 0.0
         lp.xy_valid = lp.z_valid = lp.v_xy_valid = True
         lp.heading_good_for_control = True

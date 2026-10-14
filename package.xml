@@ -16,6 +16,7 @@
   <depend>tf2_ros</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
 
   <exec_depend>ros2launch</exec_depend>
   <exec_depend>camera_ros</exec_depend>

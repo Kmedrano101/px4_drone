@@ -4,3 +4,8 @@ build/
 install/
 log/
 *.egg-info/
+
+# Codigo C del solver MPC: lo genera cada maquina con su propia version de
+# acados (scripts/mpc/generate_cycle_mpc.py). Versionar el generado romperia
+# los builds con otra version instalada.
+scripts/mpc/generated/

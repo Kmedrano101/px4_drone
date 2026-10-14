@@ -106,6 +106,22 @@ TESTS = {
             {"key": "hold_seconds", "label": "Segundos armado", "default": 10.0, "min": 3, "max": 300, "step": 1},
         ],
     },
+    "mpc_cycle": {
+        "label": "Ciclo completo con MPC (takeoff-hold-land)",
+        "desc": "Mismo ciclo que 'Ciclo completo LiDAR 2D + 1D' y las mismas protecciones, pero el control lo hace un MPC en la Pi (acados, triple integrador con limite de jerk) que publica ACELERACION: los lazos de posicion y velocidad de PX4 quedan apagados. Baja con el propio MPC hasta la altura indicada y entrega el contacto a PX4, que desarma. Sirve para comparar PID contra MPC con todo lo demas igual. Requiere el solver generado en la Pi. VUELO REAL.",
+        "launch_file": "takeoff_hold_land_mpc.launch.py",
+        "node_exe": "takeoff_hold_land_mpc",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 1.0, "min": 0.3, "max": 1.2, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 10.0, "min": 2, "max": 120, "step": 1},
+            {"key": "mpc_v_up", "label": "Velocidad de subida max (m/s)", "default": 0.6, "min": 0.1, "max": 1.0, "step": 0.05},
+            {"key": "mpc_v_dn", "label": "Velocidad de bajada max (m/s)", "default": 0.4, "min": 0.1, "max": 0.8, "step": 0.05},
+            {"key": "mpc_j_max", "label": "Jerk max (m/s3) = suavidad", "default": 4.0, "min": 1.0, "max": 15.0, "step": 0.5},
+            {"key": "mpc_descent_agl_m", "label": "Entregar a PX4 a (m del suelo)", "default": 0.25, "min": 0.1, "max": 1.0, "step": 0.05},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
     "sensor_eval": {
         "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
         "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",

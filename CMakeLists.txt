@@ -12,6 +12,7 @@ find_package(px4_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(std_msgs REQUIRED)
 
 include_directories(include)
 
@@ -92,6 +93,46 @@ add_executable(obstacle_guard_replay
 target_include_directories(obstacle_guard_replay PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 install(TARGETS obstacle_guard_replay DESTINATION lib/${PROJECT_NAME})
+
+# --- Nodo MPC (opcional) ---
+# Se compila solo si (a) acados esta instalado (ACADOS_SOURCE_DIR o ~/acados) y
+# (b) el solver se ha generado en ESTA maquina con
+#     python3 scripts/mpc/generate_cycle_mpc.py
+# El codigo generado NO se versiona: acados cambia de API entre versiones, asi
+# que cada maquina genera el suyo contra su propia instalacion.
+set(ACADOS_DIR "$ENV{ACADOS_SOURCE_DIR}")
+if(NOT ACADOS_DIR)
+  set(ACADOS_DIR "$ENV{HOME}/acados")
+endif()
+set(MPC_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/scripts/mpc/generated/c_generated_code")
+if(EXISTS "${ACADOS_DIR}/lib" AND EXISTS "${MPC_GEN_DIR}/acados_solver_px4_cycle_mpc.h")
+  message(STATUS "px4_drone: compilando takeoff_hold_land_mpc (acados en ${ACADOS_DIR})")
+  add_executable(takeoff_hold_land_mpc
+    src/takeoff_hold_land_mpc.cpp
+    src/takeoff_position_hold_base.cpp
+    src/obstacle_guard.cpp
+    src/mpc_cycle.cpp)
+  target_include_directories(takeoff_hold_land_mpc PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${MPC_GEN_DIR}
+    ${ACADOS_DIR}/include
+    ${ACADOS_DIR}/include/acados
+    ${ACADOS_DIR}/include/blasfeo/include
+    ${ACADOS_DIR}/include/hpipm/include)
+  target_link_libraries(takeoff_hold_land_mpc
+    ${MPC_GEN_DIR}/libacados_ocp_solver_px4_cycle_mpc.so
+    ${ACADOS_DIR}/lib/libacados.so)
+  set_target_properties(takeoff_hold_land_mpc PROPERTIES
+    BUILD_RPATH "${MPC_GEN_DIR};${ACADOS_DIR}/lib"
+    INSTALL_RPATH "${MPC_GEN_DIR};${ACADOS_DIR}/lib")
+  ament_target_dependencies(takeoff_hold_land_mpc rclcpp px4_msgs sensor_msgs geometry_msgs std_msgs)
+  install(TARGETS takeoff_hold_land_mpc DESTINATION lib/${PROJECT_NAME})
+else()
+  message(WARNING
+    "px4_drone: NO se compila takeoff_hold_land_mpc. "
+    "Falta acados en ${ACADOS_DIR} o el solver generado en ${MPC_GEN_DIR} "
+    "(generalo con: python3 scripts/mpc/generate_cycle_mpc.py)")
+endif()
 
 install(DIRECTORY
   launch

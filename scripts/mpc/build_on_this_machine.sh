@@ -20,8 +20,12 @@ echo "== compilando en $WS"
 source /opt/ros/jazzy/setup.bash
 cd "$WS"
 # -j1 en la Pi 4: con mas trabajos se queda sin memoria.
+# --cmake-force-configure es imprescindible: la comprobacion de "existe el
+# solver generado" se evalua al CONFIGURAR, y colcon no reconfigura solo porque
+# aparezcan ficheros nuevos. Sin esto, generar el solver despues de una
+# compilacion previa no sirve de nada y el nodo MPC se queda fuera en silencio.
 MAKEFLAGS=${MAKEFLAGS:--j1} colcon build --packages-select px4_drone --parallel-workers 1 \
-  --cmake-args -DCMAKE_BUILD_TYPE=Release
+  --cmake-force-configure --cmake-args -DCMAKE_BUILD_TYPE=Release
 sync   # que el codigo generado y el install lleguen al disco antes de un reinicio
 test -x "$WS/install/px4_drone/lib/px4_drone/takeoff_hold_land_mpc" \
   && echo "OK: takeoff_hold_land_mpc instalado" \

@@ -132,18 +132,18 @@ TESTS = {
     },
     "mpc_cycle": {
         "label": "Ciclo completo con MPC (takeoff-hold-land)",
-        "desc": "Mismo ciclo que 'Ciclo completo LiDAR 2D + 1D' y las mismas protecciones, pero el control lo hace un MPC en la Pi (acados, triple integrador con limite de jerk) que publica ACELERACION: los lazos de posicion y velocidad de PX4 quedan apagados. Baja con el propio MPC hasta la altura indicada y entrega el contacto a PX4, que desarma. Sirve para comparar PID contra MPC con todo lo demas igual. Requiere el solver generado en la Pi. VUELO REAL.",
+        "desc": "Mismo ciclo que 'Ciclo completo con PID' y las mismas protecciones, pero el control lo hace un MPC en la Pi (acados, triple integrador con limite de jerk) que publica ACELERACION: los lazos de posicion y velocidad de PX4 quedan apagados. Baja con el propio MPC hasta la altura indicada y entrega el contacto a PX4, que desarma. Sirve para comparar PID contra MPC con todo lo demas igual. Requiere el solver generado en la Pi. VUELO REAL.",
         "launch_file": "takeoff_hold_land_mpc.launch.py",
         "node_exe": "takeoff_hold_land_mpc",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
-            {"key": "hold_seconds", "label": "Hold (s)", "default": 10.0, "min": 2, "max": 120, "step": 1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 30.0, "min": 2, "max": 120, "step": 1},
             {"key": "mpc_v_up", "label": "Velocidad de subida max (m/s)", "default": 0.6, "min": 0.1, "max": 1.0, "step": 0.05},
             {"key": "mpc_v_dn", "label": "Velocidad de bajada max (m/s)", "default": 0.4, "min": 0.1, "max": 0.8, "step": 0.05},
             {"key": "mpc_j_max", "label": "Jerk max (m/s3) = suavidad", "default": 4.0, "min": 1.0, "max": 15.0, "step": 0.5},
             {"key": "mpc_descent_agl_m", "label": "Entregar a PX4 a (m del suelo)", "default": 0.25, "min": 0.1, "max": 1.0, "step": 0.05},
-            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
     "sensor_eval": {
@@ -160,14 +160,14 @@ TESTS = {
         ],
     },
     "ev_takeoff": {
-        "label": "Ciclo completo LiDAR 2D + 1D",
-        "desc": "Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza usando el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.0 m. Parada por obstaculo con el LiDAR 2D (360 grados): frena y aterriza si algo se acerca a esa distancia. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
+        "label": "Ciclo completo con PID (takeoff-hold-land)",
+        "desc": "Linea base de la comparacion de controladores: el control lo hace la cascada P/PID de PX4 a partir de setpoints de POSICION. Lanza LD19 + slam_toolbox + el puente EV, despega, mantiene posicion y aterriza con el LiDAR 2D (SLAM/EV) para posicion/yaw y el LiDAR 1D + baro para altura. Techo de 1.0 m. Parada por obstaculo con el LiDAR 2D (360 grados): frena y aterriza si algo se acerca a esa distancia. Necesita EKF2_EV_CTRL=9 en el FC. VUELO REAL.",
         "launch_file": "takeoff_position_hold_ev.launch.py",
         "node_exe": "takeoff_position_hold_ev",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
         "needs_confirm_takeoff": True,
         "params": [
             {"key": "takeoff_height_m", "label": "Altura (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
-            {"key": "hold_seconds", "label": "Hold (s)", "default": 5.0, "min": 2, "max": 60, "step": 1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 30.0, "min": 2, "max": 120, "step": 1},
             {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },

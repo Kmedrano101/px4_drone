@@ -7,7 +7,7 @@ Recorrido de la cruz:
         -> izquierda (1.0m) -> centro -> derecha (1.0m) -> centro -> land -> disarm
 
 Vuelve al centro en cada recorrido.
-Techo de 1.2 m (el nodo se niega a arrancar si se pide mas).
+Techo de 1.0 m (el nodo se niega a arrancar si se pide mas).
 
 Lanza el stack completo si run_bridge:=true: px4_drone_slam (LD19 + slam_toolbox)
 + MicroXRCEAgent + ev_odometry_bridge + takeoff_position_hold_ev.
@@ -33,7 +33,7 @@ def generate_launch_description():
     )
     takeoff_height_arg = DeclareLaunchArgument(
         'takeoff_height_m', default_value='1.0',
-        description='Metros a subir (ENU, hacia arriba) desde el punto de armado. Techo 1.2 m.',
+        description='Metros a subir (ENU, hacia arriba) desde el punto de armado. Techo 1.0 m.',
     )
     hold_seconds_arg = DeclareLaunchArgument(
         'hold_seconds', default_value='5.0',

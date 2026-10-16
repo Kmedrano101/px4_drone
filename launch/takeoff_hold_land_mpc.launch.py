@@ -27,7 +27,7 @@ def generate_launch_description():
     )
     takeoff_height_arg = DeclareLaunchArgument(
         'takeoff_height_m', default_value='1.0',
-        description='Metros a subir (ENU, hacia arriba) desde el punto de armado. Techo 1.2 m.',
+        description='Metros a subir (ENU, hacia arriba) desde el punto de armado. Techo 1.0 m.',
     )
     hold_seconds_arg = DeclareLaunchArgument(
         'hold_seconds', default_value='5.0',

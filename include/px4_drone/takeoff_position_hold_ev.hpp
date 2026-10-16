@@ -21,8 +21,13 @@
 // (su lista de topics DDS se compila en el firmware y no lo incluye). Por eso
 // se usa vehicle_local_position: xy_valid, z_valid, heading_good_for_control,
 // !dead_reckoning y eph < 1.0 m.
-// La altura esta limitada a 1.2 m (techo fiable del LiDAR 1D, EKF2_RNG_A_HMAX),
-// rechazada en el constructor si se pide mas.
+// La altura esta limitada a 1.0 m, rechazada en el constructor si se pide mas.
+// Medido con laser el 2026-10-16: el LiDAR 1D no esta descalibrado, se queda sin
+// senal sobre el hormigon oscuro y su lectura satura siguiendo
+// 2.53*(1-exp(-real/2.21)). A 1 m el error es del 4%, a 1.5 m ya es del 17%. El
+// techo es el mismo valor que EKF2_RNG_A_HMAX en el FC (1.0 desde esa fecha):
+// por encima, el EKF deja de recibir ayuda del rango justo donde el baro solo
+// deriva ~3 mm/s. Ver reports/2026-10-16_lidar1d-saturacion-reflectividad.md.
 //
 // Parada por obstaculo (2026-09-18): con obstacle_stop_distance_m > 0 el nodo
 // vigila /scan en los 360 grados. No arma si hay algo mas cerca que esa
@@ -52,8 +57,8 @@ public:
 
     if (takeoffHeightM() > kMaxHeightM) {
       refuseToRun(
-        "takeoff_height_m supera el techo fiable del lidar 1D (" +
-        std::to_string(kMaxHeightM) + " m).");
+        "takeoff_height_m supera la zona honesta del lidar 1D (" +
+        std::to_string(kMaxHeightM) + " m): por encima la lectura satura.");
       return;
     }
 
@@ -278,7 +283,7 @@ private:
     return buf;
   }
 
-  static constexpr float kMaxHeightM = 1.2f;
+  static constexpr float kMaxHeightM = 1.0f;
   static constexpr float kMaxEphM = 1.0f;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr pose_sub_;

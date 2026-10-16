@@ -52,6 +52,32 @@
   .card p.desc { font-size: 13px; color: #aaa; margin: 0 0 10px 0; }
   .card.takeoff { border-color: #a04000; }
 
+  /* Tarjetas desplegables. En el campo la lista tiene que caber en el movil, y
+     con un solo panel abierto a la vez es mas dificil lanzar la prueba de al
+     lado por error. <details> nativo: funciona sin JS y es accesible. */
+  details.card { padding: 0; }
+  details.card > summary {
+    display: flex; align-items: center; gap: 10px;
+    padding: 16px 14px; min-height: 56px;   /* dedo con guante, a oscuras */
+    font-size: 16px; font-weight: bold;
+    cursor: pointer; list-style: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  details.card > summary::-webkit-details-marker { display: none; }
+  details.card > summary .chev { color: #888; font-size: 13px; transition: transform .15s; }
+  details.card[open] > summary .chev { transform: rotate(90deg); }
+  details.card > summary .sum-title { flex: 1; }
+  details.card[open] > summary { border-bottom: 1px solid #333; }
+  details.card.running-card { border-color: #f1c40f; }
+  .card-body { padding: 14px; }
+  .badge {
+    font-size: 11px; font-weight: bold; padding: 3px 7px;
+    border-radius: 10px; white-space: nowrap;
+  }
+  .badge.flight { background: #a04000; color: #ffd9b0; }
+  .badge.na { background: #333; color: #e67e22; }
+  .badge.live { background: #f1c40f; color: #111; }
+
   .field { margin-bottom: 8px; }
   .field label { display: block; font-size: 12px; color: #ccc; margin-bottom: 2px; }
   .field input[type=number] {
@@ -102,8 +128,16 @@
 
 <main>
 {% for id, t in tests.items() %}
-  <div class="card {{ 'takeoff' if t.needs_confirm_takeoff else '' }}" id="card-{{ id }}">
-    <h2>{{ t.label }}</h2>
+  <details class="card {{ 'takeoff' if t.needs_confirm_takeoff else '' }}"
+           id="card-{{ id }}" data-test="{{ id }}">
+    <summary>
+      <span class="chev">&#9654;</span>
+      <span class="sum-title">{{ t.label }}</span>
+      {% if t.needs_confirm_takeoff %}<span class="badge flight">VUELO REAL</span>{% endif %}
+      {% if not t.available %}<span class="badge na">no disponible</span>{% endif %}
+      <span class="badge live" id="{{ id }}-live" style="display:none">corriendo</span>
+    </summary>
+    <div class="card-body">
     <p class="desc">{{ t.desc }}</p>
 
     {% for p in t.params %}
@@ -129,7 +163,8 @@
       Lanzar
     </button>
     <div class="err" id="{{ id }}-err"></div>
-  </div>
+    </div>
+  </details>
 {% endfor %}
 </main>
 
@@ -218,6 +253,7 @@ async function poll() {
     const data = await res.json();
     lastRunning = data.running;
     runningTest = data.running ? data.test_id : null;
+    marcarPanelCorriendo(runningTest);
 
     const line = document.getElementById("status-line");
     if (data.running) {
@@ -273,6 +309,57 @@ async function switchNet(mode) {
   } catch (e) {
     err.textContent = "sin respuesta (puede que el cambio ya este en curso)";
   }
+}
+
+// --- paneles desplegables --------------------------------------------------
+// Uno abierto a la vez: en el campo la lista no cabe en el movil y asi es mas
+// dificil tocar el "Lanzar" de la prueba de al lado. Se recuerda cual estaba
+// abierto porque la misma prueba se repite muchas veces seguidas.
+const PANEL_KEY = "px4_drone_panel_abierto";
+const panels = Array.from(document.querySelectorAll("details.card"));
+let panelAutoAbierto = null;
+
+function recordarPanel(id) {
+  try {
+    if (id) localStorage.setItem(PANEL_KEY, id);
+    else localStorage.removeItem(PANEL_KEY);
+  } catch (e) { /* ventana privada o almacenamiento bloqueado: no es critico */ }
+}
+
+function panelRecordado() {
+  try { return localStorage.getItem(PANEL_KEY); } catch (e) { return null; }
+}
+
+for (const d of panels) {
+  d.addEventListener("toggle", () => {
+    if (!d.open) {
+      if (panelRecordado() === d.dataset.test) recordarPanel(null);
+      return;
+    }
+    for (const otro of panels) {
+      if (otro !== d) otro.open = false;
+    }
+    recordarPanel(d.dataset.test);
+  });
+}
+
+const guardado = panelRecordado();
+if (guardado) {
+  const d = document.getElementById(`card-${guardado}`);
+  if (d) d.open = true;
+}
+
+// La prueba que esta corriendo se marca y se abre UNA vez, al empezar: si
+// despues se cierra a mano, se respeta y no se vuelve a abrir en cada poll.
+function marcarPanelCorriendo(id) {
+  for (const d of panels) {
+    const corre = d.dataset.test === id;
+    d.classList.toggle("running-card", corre);
+    const badge = document.getElementById(`${d.dataset.test}-live`);
+    if (badge) badge.style.display = corre ? "" : "none";
+    if (corre && panelAutoAbierto !== id) d.open = true;
+  }
+  panelAutoAbierto = id;
 }
 
 updateButtons();

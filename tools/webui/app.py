@@ -282,17 +282,27 @@ def status():
             _state["started_at"] = None
             _state["bag_path"] = None
 
+        # El boton "Limpiar" de la pagina NO borra nada: manda la linea desde la
+        # que quiere ver y aqui se recorta la respuesta. El archivo de la prueba
+        # queda intacto, que es el que vale como registro.
+        from_line = request.args.get("from_line", type=int) or 0
         log_tail = ""
+        log_total = 0
         if _state["log_path"] and os.path.exists(_state["log_path"]):
             with open(_state["log_path"], "r", errors="replace") as f:
                 lines = f.readlines()
-                log_tail = "".join(lines[-120:])
+            log_total = len(lines)
+            if from_line > log_total:
+                from_line = 0   # otro archivo (prueba nueva): no se oculta nada
+            log_tail = "".join(lines[from_line:][-120:])
 
         return jsonify({
             "running": running,
             "test_id": _state["test_id"],
             "elapsed_s": (time.time() - _state["started_at"]) if _state["started_at"] else 0,
             "log_tail": log_tail,
+            "log_total_lines": log_total,
+            "log_from_line": from_line,
             "bag_path": bag_path,
         })
 

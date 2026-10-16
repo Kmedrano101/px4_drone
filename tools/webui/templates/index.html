@@ -34,7 +34,13 @@
   #ctl-err { color: #e74c3c; font-size: 13px; padding: 0 16px; }
 
   #status-panel { padding: 12px 16px; }
-  #status-line { font-size: 15px; margin-bottom: 6px; }
+  #status-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+  #status-line { font-size: 15px; flex: 1; }
+  #clear-log-btn {
+    background: #2a2a2a; color: #bbb; border: 1px solid #444; border-radius: 6px;
+    padding: 8px 12px; font-size: 12px; white-space: nowrap;
+  }
+  #clear-log-btn:active { background: #333; color: #eee; }
   #status-line.running { color: #f1c40f; font-weight: bold; }
   #status-line.idle { color: #888; }
   #log-box {
@@ -122,7 +128,11 @@
 </div>
 
 <div id="status-panel">
-  <div id="status-line" class="idle">Sin test corriendo.</div>
+  <div id="status-row">
+    <div id="status-line" class="idle">Sin test corriendo.</div>
+    <button id="clear-log-btn" onclick="clearLog()"
+            title="Solo limpia la pantalla. El log completo se sigue guardando en el archivo de la prueba.">Limpiar</button>
+  </div>
   <div id="log-box"></div>
 </div>
 
@@ -247,13 +257,36 @@ function updateButtons() {
   document.getElementById("land-btn").disabled = !ctl;
 }
 
+// "Limpiar" no borra nada: se recuerda por que linea del log iba la pantalla y
+// se pide al servidor desde ahi. El archivo de la prueba queda intacto, que es
+// el que vale como registro (y es lo que se analiza despues del vuelo).
+let logDesdeLinea = 0;
+let logTotalLineas = 0;
+let logTestId = null;
+
+function clearLog() {
+  logDesdeLinea = logTotalLineas;
+  document.getElementById("log-box").textContent = "";
+}
+
 async function poll() {
   try {
-    const res = await fetch("/api/status");
+    const res = await fetch(`/api/status?from_line=${logDesdeLinea}`);
     const data = await res.json();
     lastRunning = data.running;
     runningTest = data.running ? data.test_id : null;
     marcarPanelCorriendo(runningTest);
+
+    // Prueba nueva = archivo de log nuevo: se vuelve a mostrar todo, o lo
+    // limpiado antes esconderia el log de esta. El servidor tambien lo
+    // corrige si la linea pedida ya no existe.
+    if (data.test_id !== logTestId) {
+      logTestId = data.test_id;
+      logDesdeLinea = 0;
+    } else if (typeof data.log_from_line === "number" && data.log_from_line !== logDesdeLinea) {
+      logDesdeLinea = data.log_from_line;
+    }
+    logTotalLineas = data.log_total_lines || 0;
 
     const line = document.getElementById("status-line");
     if (data.running) {

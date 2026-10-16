@@ -67,6 +67,25 @@ EvOffboardHandshake::EvOffboardHandshake(float default_hold_seconds)
     active_cycles_ / kLoopRateHz);
 }
 
+bool EvOffboardHandshake::rcOffboardIntentLost()
+{
+  const bool switch_en_offboard =
+    last_nav_state_user_intention_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD;
+  const bool fc_en_offboard =
+    !offboard_confirmed_ || last_nav_state_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD;
+  if (switch_en_offboard && fc_en_offboard) {
+    return false;
+  }
+  RCLCPP_ERROR(
+    get_logger(),
+    "El switch del RC ya no esta en OFFBOARD (intencion del piloto=%s, nav_state=%s): NO SE ARMA. "
+    "Es el piloto quien decide cuando entrar en OFFBOARD.",
+    navStateToString(last_nav_state_user_intention_).c_str(),
+    navStateToString(last_nav_state_).c_str());
+  state_ = State::kFinished;
+  return true;
+}
+
 bool EvOffboardHandshake::evOdometryFresh() const
 {
   if (!ev_odometry_seen_) {
@@ -146,6 +165,9 @@ void EvOffboardHandshake::onTimer()
       }
 
     case State::kRequestOffboard: {
+        if (rcOffboardIntentLost()) {
+          break;
+        }
         publishOffboardControlMode();
         publishTrajectorySetpoint();
         publishVehicleCommand(
@@ -157,6 +179,11 @@ void EvOffboardHandshake::onTimer()
       }
 
     case State::kArm: {
+        // Hasta que el ARM sale, el switch del RC manda: si el piloto lo mueve
+        // fuera de OFFBOARD en estos segundos, no se arma.
+        if (!arm_command_sent_ && rcOffboardIntentLost()) {
+          break;
+        }
         publishOffboardControlMode();
         publishTrajectorySetpoint();
 
@@ -180,6 +207,7 @@ void EvOffboardHandshake::onTimer()
           publishVehicleCommand(
             VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
             VehicleCommand::ARMING_ACTION_ARM);
+          arm_command_sent_ = true;
           RCLCPP_INFO(get_logger(), "Solicitando ARM...");
         }
 

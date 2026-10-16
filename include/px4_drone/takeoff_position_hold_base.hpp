@@ -192,6 +192,13 @@ private:
   // disparo el failsafe desaparece (ver reporte de vuelo real 2026-09-11,
   // "riesgo grave: reentrada automatica en OFFBOARD").
   bool controlLostDuringFlight();
+
+  // El switch del RC tiene que seguir en OFFBOARD hasta el momento de armar.
+  // kWaitRcOffboard lo comprueba una vez, pero despues pasan hasta 13 s (10 de
+  // espera de la confirmacion de OFFBOARD + 3 de kArmDelayCycles) en los que el
+  // piloto puede mover el switch, y offboard_confirmed_ es un pestillo que no
+  // se suelta. Sin esto el nodo armaba con el switch ya fuera de OFFBOARD.
+  bool rcOffboardIntentLost();
   // Pide NAV_LAND y pasa a kLand. Comentario historico: a diferencia de
   // controlLostDuringFlight() (que solo deja de publicar porque el control ya
   // no es nuestro), aca el nodo todavia tiene el control y lo suelta el mismo.

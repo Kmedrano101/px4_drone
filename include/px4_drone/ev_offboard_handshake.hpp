@@ -60,6 +60,11 @@ private:
   bool evReady() const;
   bool evOdometryFresh() const;
   static std::string navStateToString(uint8_t nav_state);
+
+  // El switch del RC tiene que seguir en OFFBOARD hasta el momento de armar:
+  // kWaitRcOffboard lo mira una vez y luego pasan varios segundos en los que el
+  // piloto puede moverlo, con offboard_confirmed_ ya echado.
+  bool rcOffboardIntentLost();
   static std::string commandResultToString(uint8_t result);
 
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
@@ -82,6 +87,7 @@ private:
   rclcpp::Time last_ev_odometry_stamp_{0, 0, RCL_ROS_TIME};
   bool ev_odometry_seen_{false};
   bool offboard_confirmed_{false};
+  bool arm_command_sent_{false};
   bool arm_confirmed_{false};
   bool disarm_confirmed_{false};
   bool arm_wait_started_{false};

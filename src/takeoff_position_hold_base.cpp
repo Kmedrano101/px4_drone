@@ -179,6 +179,9 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kRequestOffboard: {
+        if (rcOffboardIntentLost()) {
+          break;
+        }
         publishOffboardControlMode();
         publishHoldCurrentPosition();
         publishVehicleCommand(
@@ -190,6 +193,13 @@ void TakeoffPositionHoldBase::onTimer()
       }
 
     case State::kArm: {
+        // Mientras el ARM no haya salido, el switch del RC manda: si el piloto
+        // lo mueve fuera de OFFBOARD en estos segundos, no se arma. Una vez
+        // enviado el comando, el caso lo cubre flightChecksFailed() desde
+        // kTakeoff, que deja de publicar y no le pisa el control al piloto.
+        if (!arm_command_sent_ && rcOffboardIntentLost()) {
+          break;
+        }
         publishOffboardControlMode();
         publishHoldCurrentPosition();
 
@@ -643,6 +653,27 @@ void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedP
     RCLCPP_WARN(get_logger(), "failsafe: %s", msg->failsafe ? "true" : "false");
     last_failsafe_ = msg->failsafe;
   }
+}
+
+bool TakeoffPositionHoldBase::rcOffboardIntentLost()
+{
+  const bool switch_en_offboard =
+    last_nav_state_user_intention_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD;
+  // nav_state solo se exige una vez confirmado: antes de eso justamente se esta
+  // esperando a que el FC entre en OFFBOARD.
+  const bool fc_en_offboard =
+    !offboard_confirmed_ || last_nav_state_ == VehicleStatus::NAVIGATION_STATE_OFFBOARD;
+  if (switch_en_offboard && fc_en_offboard) {
+    return false;
+  }
+  RCLCPP_ERROR(
+    get_logger(),
+    "El switch del RC ya no esta en OFFBOARD (intencion del piloto=%s, nav_state=%s): NO SE ARMA. "
+    "Es el piloto quien decide cuando entrar en OFFBOARD.",
+    navStateToString(last_nav_state_user_intention_).c_str(),
+    navStateToString(last_nav_state_).c_str());
+  state_ = State::kFinished;
+  return true;
 }
 
 bool TakeoffPositionHoldBase::controlLostDuringFlight()

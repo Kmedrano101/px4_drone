@@ -63,6 +63,13 @@ def crear_modelo():
 def crear_ocp(N, dt):
     ocp = AcadosOcp()
     ocp.model = crear_modelo()
+    # Nombres estables para el wrapper C++ y CMake; acados reciente usa
+    # por defecto un nombre de OCP con hash y otra carpeta de exportacion.
+    ocp.name = "px4_cycle_mpc"
+    if hasattr(ocp, "code_gen_options"):
+        ocp.code_gen_options.code_export_directory = "c_generated_code"
+    else:
+        ocp.code_export_directory = "c_generated_code"
     ocp.dims.N = N
 
     # --- coste: seguimiento de [p, v, a] + penalizacion del jerk

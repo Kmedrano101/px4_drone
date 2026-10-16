@@ -127,6 +127,8 @@ if(EXISTS "${ACADOS_DIR}/lib" AND EXISTS "${MPC_GEN_DIR}/acados_solver_px4_cycle
     INSTALL_RPATH "${MPC_GEN_DIR};${ACADOS_DIR}/lib")
   ament_target_dependencies(takeoff_hold_land_mpc rclcpp px4_msgs sensor_msgs geometry_msgs std_msgs)
   install(TARGETS takeoff_hold_land_mpc DESTINATION lib/${PROJECT_NAME})
+  # Las dependencias transitivas de acados necesitan la ruta al cargar ROS.
+  ament_environment_hooks("${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/acados.dsv.in")
 else()
   message(WARNING
     "px4_drone: NO se compila takeoff_hold_land_mpc. "

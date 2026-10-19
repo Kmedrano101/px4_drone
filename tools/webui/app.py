@@ -217,7 +217,9 @@ def _start_sysmon(run_id, log_path):
         f"source /opt/ros/jazzy/setup.bash && "
         f"source {EXTRA_WS}/install/setup.bash && "
         f"source {WORKSPACE}/install/setup.bash && "
-        f"export ROS_DOMAIN_ID=0 && "
+        f"export ROS_DOMAIN_ID=10 && "
+        f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
         f"exec /usr/bin/python3 {shlex.quote(SYSMON)} --ros-rates "
         f"--out {shlex.quote(os.path.join(LOG_DIR, run_id + '_sysmon.csv'))} "
         f"--append-to {shlex.quote(log_path)}"
@@ -313,7 +315,9 @@ def _start_bag(run_id):
         f"source /opt/ros/jazzy/setup.bash && "
         f"source {EXTRA_WS}/install/setup.bash && "
         f"source {WORKSPACE}/install/setup.bash && "
-        f"export ROS_DOMAIN_ID=0 && "
+        f"export ROS_DOMAIN_ID=10 && "
+        f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
         f"ros2 bag record -a -o {shlex.quote(bag_path)}"
     )
     bag_log = open(os.path.join(LOG_DIR, f"{run_id}_bag.log"), "w")
@@ -357,7 +361,9 @@ def launch():
                 f"source /opt/ros/jazzy/setup.bash && "
                 f"source {EXTRA_WS}/install/setup.bash && "
                 f"source {WORKSPACE}/install/setup.bash && "
-                f"export ROS_DOMAIN_ID=0 && "
+                f"export ROS_DOMAIN_ID=10 && "
+                f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+                f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
                 f"{cmd_str}"
             )
 

@@ -36,6 +36,7 @@ def generate_launch_description():
         ('mpc_dist_max', '1.5'),
         ('mpc_dist_min_agl_m', '0.35'),
         ('mpc_delay_comp_s', '0.0'),
+        ('topic_version_suffix', ''),
     ]
 
     args = [

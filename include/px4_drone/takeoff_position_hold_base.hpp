@@ -145,6 +145,16 @@ protected:
   // true mientras el ciclo esta en la fase de mantener posicion. Lo usa el nodo
   // CTBR para engancharse solo ahi y dejar el despegue a PX4.
   bool inHoldPhase() const {return state_ == State::kHold;}
+  // Lectura pura, sin efectos: a diferencia de controlLostDuringFlight(), que
+  // ademas cambia de estado y escribe en el log. Para decidir si todavia se
+  // puede publicar algo que PX4 obedeceria fuera de Offboard (tasas por DDS no
+  // estan filtradas por modo, PX4 #26712).
+  bool offboardArmed() const
+  {
+    return last_nav_state_ == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD &&
+           last_arming_state_ == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
+           !last_failsafe_;
+  }
 
   // Publica un setpoint de ACELERACION (NED, m/s^2) con posicion y velocidad en
   // NaN. En PX4 1.14.3 una componente NaN no influye (PositionControl.cpp) y,

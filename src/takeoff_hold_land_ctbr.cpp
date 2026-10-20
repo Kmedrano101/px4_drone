@@ -184,7 +184,7 @@ private:
     if (hold_desde_.nanoseconds() == 0) {
       hold_desde_ = now();
     }
-    if (enganchado_) {
+    if (enganchado_ || no_reenganchar_) {
       return;
     }
     if ((now() - hold_desde_).seconds() < engage_delay_s_) {
@@ -198,9 +198,15 @@ private:
     }
     // Se arranca desde el empuje de hover y se deja que la rampa lo mueva: asi
     // el cambio de controlador no mete un escalon de empuje.
+    if (!offboardArmed()) {
+      return;   // en el hold pero sin control: no se toma nada
+    }
     thr_pub_ = static_cast<float>(thr_hover_);
     enganchado_ = true;
-    ultimo_rate_ok_ = now();
+    // Heartbeat de body_rate ya, no en el proximo ciclo de 20 Hz: hasta que PX4
+    // lo reciba, su propio controlador de actitud sigue publicando
+    // vehicle_rates_setpoint y habria dos emisores en el mismo topic.
+    publishOffboardControlModeFlags(false, false, false, /*body_rate=*/true);
     RCLCPP_WARN(
       get_logger(),
       "CTBR ENGANCHADO: a partir de ahora el lazo de actitud es nuestro (tasas + empuje a %.0f Hz). "
@@ -213,11 +219,23 @@ private:
       return;
     }
     enganchado_ = false;
+    // Definitivo para lo que queda de ciclo. Soltar y volver a tomar el mando
+    // a tirones sobre una condicion marginal seria peor que cualquiera de las
+    // dos opciones por separado; el resto del hold lo vuela PX4.
+    no_reenganchar_ = true;
+    if (!offboardArmed()) {
+      // El control ya no es nuestro (piloto, failsafe o desarme). No se publica
+      // NADA mas: ni posicion ni heartbeat. Dejar de hablar es la entrega.
+      RCLCPP_ERROR(
+        get_logger(), "CTBR SOLTADO (%s) con el control ya perdido: se deja de publicar.",
+        motivo.c_str());
+      return;
+    }
     RCLCPP_WARN(
       get_logger(), "CTBR SOLTADO (%s): se vuelve a setpoints de posicion y manda PX4.",
       motivo.c_str());
-    // El heartbeat del siguiente ciclo ya pedira posicion; la base publica el
-    // setpoint de posicion en cuanto vuelva a pasar por emitTrackingSetpoint.
+    // En este mismo ciclo, no en el siguiente: el controlador de tasas de PX4
+    // obedece el ultimo setpoint recibido hasta que el lazo de posicion vuelva.
     publishOffboardControlModeFlags(/*position=*/true, false, false);
     publishHoldCurrentPosition();
   }
@@ -225,6 +243,15 @@ private:
   void lazoRapido()
   {
     if (!enganchado_) {
+      return;
+    }
+    // Primero la fase, antes que los datos: si el ciclo ya no esta en el hold
+    // (termino el tiempo, salto un obstaculo, HOLD/ATERRIZAR desde la webui, o
+    // controlLostDuringFlight() lo dejo en kFinished porque el piloto tomo el
+    // mando), seguir publicando tasas seria pelear con quien controle ahora.
+    // La base solo lo detecta a 20 Hz; este lazo va a 50 y no puede esperar.
+    if (!inHoldPhase()) {
+      soltar("el ciclo ya no esta en el hold");
       return;
     }
     // Si el lazo se queda sin datos o sin solucion, soltar es mas seguro que
@@ -261,7 +288,6 @@ private:
       return;   // sin solucion no se publica nada nuevo
     }
     fallos_ = 0;
-    ultimo_rate_ok_ = now();
 
     // Empuje especifico (m/s^2) -> normalizado. Mapeo LINEAL con el hover como
     // ancla: hover (T = g) -> ctbr_thr_hover. Es aproximado y depende de
@@ -321,7 +347,6 @@ private:
   px4_msgs::msg::VehicleAttitude::SharedPtr last_att_;
   rclcpp::Time last_att_time_{0, 0, RCL_ROS_TIME};
   rclcpp::Time hold_desde_{0, 0, RCL_ROS_TIME};
-  rclcpp::Time ultimo_rate_ok_{0, 0, RCL_ROS_TIME};
 
   px4_drone::CtbrLimits lim_;
   px4_drone::CtbrWeights w_;
@@ -334,6 +359,7 @@ private:
   double max_tilt_deg_{20.0};
 
   bool enganchado_{false};
+  bool no_reenganchar_{false};
   bool ref_valida_{false};
   float ref_[3] = {0.0f, 0.0f, 0.0f};
   float ref_yaw_{0.0f};

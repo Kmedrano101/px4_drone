@@ -30,16 +30,20 @@
 // deriva ~3 mm/s. Ver reports/2026-10-16_lidar1d-saturacion-reflectividad.md.
 //
 // Parada por obstaculo (2026-09-18): con obstacle_stop_distance_m > 0 el nodo
-// vigila /scan en los 360 grados. No arma si hay algo mas cerca que esa
-// distancia, y en vuelo frena y aterriza si un obstaculo se acerca tanto que
-// hay que empezar a frenar para quedar parado a esa distancia. Usa los
-// barridos crudos, no el SLAM ni la posicion del EKF: ver obstacle_guard.hpp.
+// vigila /scan en los 360 grados desde el despegue. Comprueba antes de armar
+// que el barrido sea util y que no haya obstaculos dentro de la distancia de
+// parada, excluyendo el circulo ciego de 0.35 m de radio. Frena y aterriza si
+// un obstaculo se acerca tanto que hay que empezar a frenar para quedar parado
+// a esa distancia. Usa los barridos crudos, no el SLAM ni la posicion del EKF:
+// ver obstacle_guard.hpp.
 //
 // Salud del SLAM (2026-09-18): ademas de lo que dice el EKF, el nodo mira la
 // covarianza de /pose de slam_toolbox. En el vuelo del 2026-09-17 el SLAM
 // perdio el tracking y su sigma paso de <0.1 m (hover) a 0.4-0.5 m, pero el
 // EKF siguio con xy_valid = true. Con sigma > slam_max_sigma_m, o sin /pose
 // durante slam_pose_timeout_s, no despega; en vuelo, aterriza.
+// slam_health_enabled=false omite esta guarda en los ciclos PID/MPC de prueba;
+// las comprobaciones del FC y la odometria EV siguen funcionando.
 class TakeoffPositionHoldEv : public TakeoffPositionHoldBase
 {
 public:
@@ -48,6 +52,13 @@ public:
   {
     if (!okToRun()) {
       return;  // la base ya se nego (falta confirm_takeoff, parametros invalidos)
+    }
+    slam_health_enabled_ = declare_parameter<bool>("slam_health_enabled", true);
+    if (!slam_health_enabled_) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Guarda de salud SLAM DESACTIVADA: sigma y antiguedad de /pose no bloquean ni "
+        "abortan este ciclo; se mantienen las comprobaciones de posicion del FC.");
     }
     slam_max_sigma_m_ = declare_parameter<double>("slam_max_sigma_m", 0.3);
     slam_pose_timeout_s_ = declare_parameter<double>("slam_pose_timeout_s", 2.5);
@@ -69,6 +80,10 @@ public:
       declare_parameter<double>("obstacle_min_valid_range_m", cfg.min_valid_range_m));
     cfg.brake_decel_m_s2 = static_cast<float>(
       declare_parameter<double>("obstacle_brake_decel_m_s2", cfg.brake_decel_m_s2));
+    cfg.blind_radius_m = static_cast<float>(
+      declare_parameter<double>("obstacle_blind_radius_m", 0.35));
+    cfg.debounce_scans = static_cast<int>(
+      declare_parameter<int>("obstacle_debounce_scans", 3));
     laser_yaw_rad_ = static_cast<float>(
       declare_parameter<double>("laser_yaw_offset_deg", 0.0) * M_PI / 180.0);
     laser_above_range_m_ = static_cast<float>(
@@ -81,6 +96,20 @@ public:
       refuseToRun(
         "obstacle_stop_distance_m debe ser 0 (desactivada) o >= 0.3 m (recibido " +
         std::to_string(cfg.stop_distance_m) + ").");
+      return;
+    }
+    if (cfg.debounce_scans < 1 || cfg.debounce_scans > 10) {
+      refuseToRun(
+        "obstacle_debounce_scans debe estar entre 1 y 10 (recibido " +
+        std::to_string(cfg.debounce_scans) + ").");
+      return;
+    }
+    if (!std::isfinite(cfg.blind_radius_m) || cfg.blind_radius_m < 0.0f ||
+      (cfg.stop_distance_m > 0.0f && cfg.blind_radius_m >= cfg.stop_distance_m))
+    {
+      refuseToRun(
+        "obstacle_blind_radius_m debe ser finito, >= 0 y menor que "
+        "obstacle_stop_distance_m cuando la parada esta activa.");
       return;
     }
     stop_distance_m_ = cfg.stop_distance_m;
@@ -102,9 +131,16 @@ public:
 
     RCLCPP_WARN(
       get_logger(),
-      "Parada por obstaculo ACTIVA: no arma con obstaculos a menos de %.2f m, y en vuelo frena y "
-      "aterriza para quedar parado a %.2f m de cualquier obstaculo (360 grados, %s).",
-      stop_distance_m_, stop_distance_m_, scan_topic.c_str());
+      "Parada por obstaculo ACTIVA desde TAKEOFF: no arma sin barrido util ni espacio libre; en vuelo frena y aterriza para quedar parado a "
+      "%.2f m de cualquier obstaculo (360 grados, %s).",
+      stop_distance_m_, scan_topic.c_str());
+    if (cfg.blind_radius_m > 0.0f) {
+      RCLCPP_WARN(
+        get_logger(),
+        "Zona ciega circular 360 grados: radio %.2f m (diametro %.2f m), centrada en el LiDAR. "
+        "Debounce %d barridos.",
+        cfg.blind_radius_m, 2.0f * cfg.blind_radius_m, cfg.debounce_scans);
+    }
   }
 
 protected:
@@ -120,7 +156,9 @@ protected:
   {
     return "LiDAR 2D SLAM/EV + LiDAR 1D (vehicle_local_position: xy/z/heading_good_for_control validos, "
            "!dead_reckoning, eph < 1.0 m; " +
-           fmt("SLAM con sigma < %.2f m y /pose reciente)", slam_max_sigma_m_);
+           (slam_health_enabled_ ?
+           fmt("SLAM con sigma < %.2f m y /pose reciente)", slam_max_sigma_m_) :
+           std::string("guarda de salud SLAM desactivada)"));
   }
 
   bool positionSourceHealthyDuringFlight() const override
@@ -194,6 +232,9 @@ private:
   // Salud del SLAM segun su propia covarianza y la frescura de /pose.
   bool slamHealthy(std::string * reason) const
   {
+    if (!slam_health_enabled_) {
+      return true;
+    }
     if (!have_pose_) {
       if (reason) {*reason = "no ha llegado ninguna /pose del SLAM.";}
       return false;
@@ -290,6 +331,7 @@ private:
   bool have_pose_{false};
   double slam_sigma_m_{std::numeric_limits<double>::infinity()};
   rclcpp::Time last_pose_time_{0, 0, RCL_ROS_TIME};
+  bool slam_health_enabled_{true};
   double slam_max_sigma_m_{0.3};
   double slam_pose_timeout_s_{2.5};
 

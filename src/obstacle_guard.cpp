@@ -26,6 +26,7 @@ float toSignedDeg(float a)
   float d = wrapTwoPi(a) * 180.0f / kPi;
   return d > 180.0f ? d - 360.0f : d;
 }
+
 }  // namespace
 
 ObstacleGuard::ObstacleGuard(const ObstacleGuardConfig & cfg)
@@ -80,6 +81,10 @@ ObstacleStatus ObstacleGuard::update(const ScanInput & in)
     }
     const float a = in.angle_min + static_cast<float>(i) * in.angle_increment + in.laser_yaw_rad;
     ++valid;
+
+    if (cfg_.blind_radius_m > 0.0f && r <= cfg_.blind_radius_m) {
+      continue;
+    }
 
     if (floor_check) {
       const float dz = -sp * std::cos(a) + sr * cp * (-std::sin(a));

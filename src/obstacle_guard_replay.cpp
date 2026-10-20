@@ -4,7 +4,7 @@
 // tools/obstacle_guard/bag_to_scans.py a partir de un rosbag):
 //   t,roll,pitch,laser_h,angle_min,angle_inc,range_min,range_max,n,r0,...,r(n-1)
 // (rangos no validos como nan). Uso:
-//   obstacle_guard_replay [stop_distance_m] < scans.csv
+//   obstacle_guard_replay [stop_distance_m] [blind_radius_m] [debounce] [min_points] < scans.csv
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
@@ -20,12 +20,22 @@ int main(int argc, char * argv[])
   if (argc > 1) {
     cfg.stop_distance_m = std::strtof(argv[1], nullptr);
   }
+  if (argc > 2) {
+    cfg.blind_radius_m = std::strtof(argv[2], nullptr);
+  }
+  if (argc > 3) {
+    cfg.debounce_scans = std::atoi(argv[3]);
+  }
+  if (argc > 4) {
+    cfg.min_points = std::atoi(argv[4]);
+  }
   px4_drone::ObstacleGuard guard(cfg);
 
   std::printf(
-    "stop_distance %.2f m, reaccion %.2f s, frenada %.1f m/s2, %d sectores, %d rayos, debounce %d\n",
-    cfg.stop_distance_m, cfg.reaction_time_s, cfg.brake_decel_m_s2, cfg.sector_count,
-    cfg.min_points, cfg.debounce_scans);
+    "stop_distance %.2f m, zona ciega %.2f m, reaccion %.2f s, frenada %.1f m/s2, "
+    "%d sectores, %d rayos, debounce %d\n",
+    cfg.stop_distance_m, cfg.blind_radius_m, cfg.reaction_time_s, cfg.brake_decel_m_s2,
+    cfg.sector_count, cfg.min_points, cfg.debounce_scans);
   std::printf("      t  cercano  rumbo  v_acerc  sector_disp  umbral  suelo  valido  estado\n");
 
   std::string line;

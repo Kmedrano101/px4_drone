@@ -4,7 +4,7 @@
 con `obstacle_stop_distance_m` (defecto **1.0 m**, `0` = desactivada):
 
 - **Antes de armar:** si hay algo más cerca que esa distancia, **no arma**.
-- **En vuelo:** si un obstáculo se acerca tanto que hay que empezar a frenar para quedar parado a
+- **Desde TAKEOFF, incluido el ascenso:** si un obstáculo se acerca tanto que hay que empezar a frenar para quedar parado a
   esa distancia, **frena** (velocidad horizontal 0, posición horizontal en NaN, altura mantenida)
   `obstacle_brake_seconds` (2 s) y **aterriza**. Si el piloto ya tomó el control, no toca nada.
 - **Sin `/scan`** durante más de 0.5 s, o con menos del 10% de rayos válidos: se trata como
@@ -24,6 +24,7 @@ barridos. A 1.2 m/s dispara a ~1.8 m para quedar a ~1.0 m.
 | Parámetro | Defecto | |
 |---|---|---|
 | `obstacle_stop_distance_m` | 1.0 | 0 = desactivada; si no, ≥ 0.3 |
+| `obstacle_blind_radius_m` | 0.35 | círculo ciego de 0.70 m de diámetro centrado en el LiDAR, en 360°; 0 lo desactiva |
 | `obstacle_brake_seconds` | 2.0 | frenado antes de pedir LAND |
 | `obstacle_brake_decel_m_s2` | 2.0 | frenada supuesta (`MPC_ACC_HOR` = 3) |
 | `obstacle_min_valid_range_m` | 0.15 | por debajo: el propio dron o ruido |
@@ -73,6 +74,11 @@ al ejecutable del nodo, buscado dentro del grupo de procesos de la prueba. No se
   pide confirmación, porque en el aire dispara el failsafe de Offboard.
 
 ## Salud del SLAM y varianza del EV (mismo día)
+
+Actualización 2026-10-20: los launches de ciclo PID/MPC usan
+`slam_health_enabled=false`. Las condiciones SLAM descritas debajo solo
+actúan con esa opción en true; las comprobaciones del FC siguen activas.
+
 
 - `takeoff_position_hold_ev` tampoco despega, y en vuelo aterriza, si `/pose` de slam_toolbox declara
   **sigma > `slam_max_sigma_m` (0.3 m)** o no llega en **`slam_pose_timeout_s` (2.5 s)**.

@@ -97,7 +97,7 @@ class MockFC(Node):
         st.timestamp = now_us
         st.nav_state = self.nav
         st.nav_state_user_intention = VehicleStatus.NAVIGATION_STATE_OFFBOARD  # switch del RC en OFFBOARD
-        st.arming_state = VehicleStatus.ARMING_STATE_ARMED if self.armed else VehicleStatus.ARMING_STATE_DISARMED
+        st.arming_state = VehicleStatus.ARMING_STATE_ARMED if self.armed else VehicleStatus.ARMING_STATE_STANDBY
         self.st_pub.publish(st)
         if self.armed and self.nav == VehicleStatus.NAVIGATION_STATE_OFFBOARD and self.last_sp is not None:
             tz = float(self.last_sp.position[2])

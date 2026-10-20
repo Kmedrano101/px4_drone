@@ -42,6 +42,9 @@ struct ObstacleGuardConfig
   float closing_window_s{0.4f};    // ventana para estimar la velocidad de acercamiento
   float floor_margin{0.85f};       // rayo que mide >= este % de la distancia al suelo = suelo
   float min_valid_fraction{0.10f};  // menos rayos validos que esto = sensor tapado o roto
+  // Radio del circulo centrado en el LiDAR que se ignora en los 360 grados.
+  // 0 desactiva la zona ciega; el nodo EV usa 0.35 m (diametro 0.70 m).
+  float blind_radius_m{0.0f};
 };
 
 struct ScanInput

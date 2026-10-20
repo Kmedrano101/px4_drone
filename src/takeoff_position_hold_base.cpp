@@ -533,7 +533,7 @@ void TakeoffPositionHoldBase::patternTargetNed(size_t leg, float * ned_x, float 
 }
 
 void TakeoffPositionHoldBase::publishOffboardControlModeFlags(
-  bool position, bool velocity, bool acceleration)
+  bool position, bool velocity, bool acceleration, bool body_rate)
 {
   OffboardControlMode msg{};
   msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
@@ -541,8 +541,27 @@ void TakeoffPositionHoldBase::publishOffboardControlModeFlags(
   msg.velocity = velocity;
   msg.acceleration = acceleration;
   msg.attitude = false;
-  msg.body_rate = false;
+  msg.body_rate = body_rate;
   offboard_control_mode_pub_->publish(msg);
+}
+
+void TakeoffPositionHoldBase::publishRatesSetpoint(
+  float wx, float wy, float wz, float thrust_norm)
+{
+  if (vehicle_rates_setpoint_pub_ == nullptr) {
+    const std::string v = get_parameter("topic_version_suffix").as_string();
+    vehicle_rates_setpoint_pub_ = create_publisher<px4_msgs::msg::VehicleRatesSetpoint>(
+      "/fmu/in/vehicle_rates_setpoint" + v, 10);
+  }
+  px4_msgs::msg::VehicleRatesSetpoint msg{};
+  msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
+  msg.roll = wx;
+  msg.pitch = wy;
+  msg.yaw = wz;
+  // thrust_body va en FRD y normalizado: z negativa es empuje hacia arriba. Hay
+  // que rellenarlo siempre; con solo roll/pitch/yaw salta un failsafe.
+  msg.thrust_body = {0.0f, 0.0f, -std::max(0.0f, std::min(1.0f, thrust_norm))};
+  vehicle_rates_setpoint_pub_->publish(msg);
 }
 
 void TakeoffPositionHoldBase::publishOffboardControlMode()

@@ -7,6 +7,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <px4_msgs/msg/offboard_control_mode.hpp>
 #include <px4_msgs/msg/trajectory_setpoint.hpp>
+#include <px4_msgs/msg/vehicle_rates_setpoint.hpp>
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_command_ack.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
@@ -127,7 +128,23 @@ protected:
 
   // Publica el heartbeat de offboard pidiendo esos lazos. PX4 decide con esto
   // que controladores activa (control_mode.cpp).
-  void publishOffboardControlModeFlags(bool position, bool velocity, bool acceleration);
+  void publishOffboardControlModeFlags(
+    bool position, bool velocity, bool acceleration, bool body_rate = false);
+
+  // Publica un setpoint de TASAS ANGULARES + empuje colectivo (lo que la
+  // literatura llama CTBR). Con offboard_control_mode.body_rate, PX4 1.14.3 deja
+  // activo SOLO el controlador de tasas: posicion, velocidad, aceleracion y
+  // actitud quedan apagadas, y ademas mc_pos_control NO llega a correr
+  // (control_mode.cpp:169-175 del tag), asi que no hay maquina de despegue, ni
+  // limite de inclinacion, ni estimador de empuje de hover. El empuje va del
+  // mezclador a los motores. Quien llame a esto asume esa responsabilidad.
+  //   wx, wy, wz: tasas en el cuerpo (FRD, rad/s)
+  //   thrust_norm: empuje colectivo normalizado [0, 1], hacia arriba
+  void publishRatesSetpoint(float wx, float wy, float wz, float thrust_norm);
+
+  // true mientras el ciclo esta en la fase de mantener posicion. Lo usa el nodo
+  // CTBR para engancharse solo ahi y dejar el despegue a PX4.
+  bool inHoldPhase() const {return state_ == State::kHold;}
 
   // Publica un setpoint de ACELERACION (NED, m/s^2) con posicion y velocidad en
   // NaN. En PX4 1.14.3 una componente NaN no influye (PositionControl.cpp) y,
@@ -159,7 +176,7 @@ protected:
     ok_to_run_ = false;
   }
 
-private:
+protected:
   enum class State
   {
     kWaitPositionSource,  // esperando que la fuente de posicion (GPS o flujo optico+lidar) este sana
@@ -228,8 +245,10 @@ private:
   static std::string navStateToString(uint8_t nav_state);
   static std::string commandResultToString(uint8_t result);
 
+private:
   rclcpp::Publisher<px4_msgs::msg::OffboardControlMode>::SharedPtr offboard_control_mode_pub_;
   rclcpp::Publisher<px4_msgs::msg::TrajectorySetpoint>::SharedPtr trajectory_setpoint_pub_;
+  rclcpp::Publisher<px4_msgs::msg::VehicleRatesSetpoint>::SharedPtr vehicle_rates_setpoint_pub_;
   rclcpp::Publisher<px4_msgs::msg::VehicleCommand>::SharedPtr vehicle_command_pub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_sub_;
   rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_sub_;

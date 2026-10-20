@@ -136,6 +136,40 @@ else()
     "(generalo con: python3 scripts/mpc/generate_cycle_mpc.py)")
 endif()
 
+# --- Nodo CTBR: NMPC con actitud que publica tasas + empuje (opcional) ---
+# Mismo criterio que el anterior, con su propio solver:
+#     python3 scripts/mpc/generate_ctbr_mpc.py
+set(CTBR_GEN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/scripts/mpc/generated_ctbr/c_generated_code")
+if(EXISTS "${ACADOS_DIR}/lib" AND EXISTS "${CTBR_GEN_DIR}/acados_solver_px4_ctbr_mpc.h")
+  message(STATUS "px4_drone: compilando takeoff_hold_land_ctbr (acados en ${ACADOS_DIR})")
+  add_executable(takeoff_hold_land_ctbr
+    src/takeoff_hold_land_ctbr.cpp
+    src/takeoff_position_hold_base.cpp
+    src/obstacle_guard.cpp
+    src/mpc_ctbr.cpp)
+  target_include_directories(takeoff_hold_land_ctbr PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CTBR_GEN_DIR}
+    ${ACADOS_DIR}/include
+    ${ACADOS_DIR}/include/acados
+    ${ACADOS_DIR}/include/blasfeo/include
+    ${ACADOS_DIR}/include/hpipm/include)
+  target_link_libraries(takeoff_hold_land_ctbr
+    ${CTBR_GEN_DIR}/libacados_ocp_solver_px4_ctbr_mpc.so
+    ${ACADOS_DIR}/lib/libacados.so)
+  set_target_properties(takeoff_hold_land_ctbr PROPERTIES
+    BUILD_RPATH "${CTBR_GEN_DIR};${ACADOS_DIR}/lib"
+    INSTALL_RPATH "${CTBR_GEN_DIR};${ACADOS_DIR}/lib")
+  ament_target_dependencies(takeoff_hold_land_ctbr rclcpp px4_msgs sensor_msgs geometry_msgs std_msgs)
+  install(TARGETS takeoff_hold_land_ctbr DESTINATION lib/${PROJECT_NAME})
+  ament_environment_hooks("${CMAKE_CURRENT_SOURCE_DIR}/env-hooks/acados.dsv.in")
+else()
+  message(WARNING
+    "px4_drone: NO se compila takeoff_hold_land_ctbr. "
+    "Falta acados en ${ACADOS_DIR} o el solver generado en ${CTBR_GEN_DIR} "
+    "(generalo con: python3 scripts/mpc/generate_ctbr_mpc.py)")
+endif()
+
 install(DIRECTORY
   launch
   config

@@ -15,6 +15,7 @@ export LD_LIBRARY_PATH=$ACADOS_SOURCE_DIR/lib:$LD_LIBRARY_PATH
 echo "== acados: $ACADOS_SOURCE_DIR ($(cd $ACADOS_SOURCE_DIR && git describe --tags 2>/dev/null || echo '?'))"
 echo "== generando el solver con $PY"
 "$PY" "$PKG_DIR/scripts/mpc/generate_cycle_mpc.py"
+"$PY" "$PKG_DIR/scripts/mpc/generate_ctbr_mpc.py"
 
 echo "== compilando en $WS"
 source /opt/ros/jazzy/setup.bash

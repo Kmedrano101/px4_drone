@@ -162,6 +162,22 @@ TESTS = {
             {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
+    "ctbr_cycle": {
+        "label": "Ciclo completo con MPC moderno (CTBR: tasas + empuje)",
+        "desc": "El controlador que publica la literatura agil: un NMPC cuyo modelo incluye la ACTITUD (cuaternion) y cuya salida son las velocidades angulares y el empuje colectivo, no una aceleracion. Medido en esta Pi: solver 2.7 ms de media y 5.9 ms en el peor caso, asi que a 50 Hz usa el 29 por ciento del ciclo. AVISO: con body_rate PX4 1.14.3 no ejecuta mc_pos_control, asi que desaparecen la maquina de despegue, el limite de inclinacion y el estimador de empuje, y el empuje va del mezclador a los motores. Por eso el CTBR se engancha SOLO durante el hold, unos segundos despues de entrar, y el despegue y el aterrizaje los hace PX4 con setpoints de posicion igual que el ciclo PID. Se suelta solo si la actitud se queda obsoleta, si el solver falla o si la inclinacion pasa del limite. El empuje de hover normalizado HAY QUE CALIBRARLO antes de fiarse. VUELO REAL.",
+        "launch_file": "takeoff_hold_land_ctbr.launch.py",
+        "node_exe": "takeoff_hold_land_ctbr",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "ctbr_rate_hz", "label": "Frecuencia del lazo (Hz)", "default": 50.0, "min": 20.0, "max": 150.0, "step": 5.0},
+            {"key": "ctbr_thr_hover", "label": "Empuje de hover normalizado (CALIBRAR)", "default": 0.30, "min": 0.1, "max": 0.6, "step": 0.01},
+            {"key": "ctbr_engage_delay_s", "label": "Esperar en el hold antes de tomar el mando (s)", "default": 3.0, "min": 1.0, "max": 15.0, "step": 0.5},
+            {"key": "ctbr_max_tilt_deg", "label": "Inclinacion a la que se suelta (grados)", "default": 20.0, "min": 5.0, "max": 35.0, "step": 1.0},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
     "sensor_eval": {
         "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
         "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",

@@ -52,6 +52,29 @@ public:
     w_.r_jerk = p("mpc_r_jerk", 0.5);
     descent_agl_ = p("mpc_descent_agl_m", 0.25);
 
+    // Observador de perturbacion y compensacion de retardo. Los dos salen
+    // APAGADOS (0.0): con los valores por defecto este nodo se comporta
+    // exactamente igual que antes, que es la condicion para que la comparacion
+    // PID / MPC / MPC+ siga siendo entre lo mismo. El tercer ciclo es este
+    // mismo ejecutable con el launch que los activa.
+    dist_gain_ = p("mpc_dist_gain", 0.0);
+    dist_max_ = p("mpc_dist_max", 1.5);
+    dist_min_agl_ = p("mpc_dist_min_agl_m", 0.35);
+    delay_comp_s_ = p("mpc_delay_comp_s", 0.0);
+
+    if (dist_gain_ < 0.0 || dist_gain_ > 5.0) {
+      refuseToRun("mpc_dist_gain debe estar entre 0 (apagado) y 5.0 1/s.");
+      return;
+    }
+    if (dist_max_ <= 0.0 || dist_max_ > 5.0) {
+      refuseToRun("mpc_dist_max debe estar entre 0 y 5.0 m/s2.");
+      return;
+    }
+    if (delay_comp_s_ < 0.0 || delay_comp_s_ > 0.3) {
+      refuseToRun("mpc_delay_comp_s debe estar entre 0 (apagado) y 0.3 s.");
+      return;
+    }
+
     diag_pub_ = create_publisher<std_msgs::msg::Float32MultiArray>("mpc_status", 10);
 
     mpc_ = std::make_unique<px4_drone::MpcCycle>();
@@ -60,6 +83,20 @@ public:
       return;
     }
     mpc_->setWeights(w_);
+
+    if (dist_gain_ > 0.0 || delay_comp_s_ > 0.0) {
+      RCLCPP_WARN(
+        get_logger(),
+        "MPC+ ACTIVO: observador de perturbacion ganancia %.2f 1/s, tope %.2f m/s2, solo por "
+        "encima de %.2f m del suelo; compensacion de retardo %.0f ms. Con ganancia 0 y retardo 0 "
+        "este nodo es el MPC de siempre.",
+        dist_gain_, dist_max_, dist_min_agl_, 1e3 * delay_comp_s_);
+    } else {
+      RCLCPP_INFO(
+        get_logger(),
+        "MPC clasico: sin observador de perturbacion ni compensacion de retardo "
+        "(mpc_dist_gain = 0, mpc_delay_comp_s = 0).");
+    }
 
     RCLCPP_WARN(
       get_logger(),
@@ -127,8 +164,48 @@ private:
     lim_.z_floor_ned = originZNed();
     mpc_->setLimits(lim_);
 
-    const float p_meas[3] = {lp->x, lp->y, lp->z};
-    const float v_meas[3] = {lp->vx, lp->vy, lp->vz};
+    // Hueco desde el ciclo anterior: si es grande, esto es un ciclo nuevo
+    // (rearmado, reinicio del nodo) y el observador tiene que empezar de cero.
+    const rclcpp::Time ahora = now();
+    const double hueco_s = ultimo_ciclo_.nanoseconds() > 0 ?
+      (ahora - ultimo_ciclo_).seconds() : 0.0;
+    if (hueco_s <= 0.0 || hueco_s > 0.5) {
+      for (int i = 0; i < 3; ++i) {
+        d_[i] = 0.0f;
+      }
+    }
+    ultimo_ciclo_ = ahora;
+
+    // Antiguedad del dato que estamos usando: se mide cuando cambia el sello de
+    // tiempo del mensaje del FC. Es una cota inferior del retardo real (no
+    // incluye lo que tarda dentro del FC), y sirve para elegir
+    // mpc_delay_comp_s con datos en vez de a ojo.
+    if (lp->timestamp != ultimo_sello_lp_) {
+      ultimo_sello_lp_ = lp->timestamp;
+      llegada_lp_ = ahora;
+    }
+    const double edad_lp_s = llegada_lp_.nanoseconds() > 0 ?
+      (ahora - llegada_lp_).seconds() : 0.0;
+
+    actualizarPerturbacion(lp, hueco_s);
+    mpc_->setDisturbance(d_);
+
+    float p_meas[3] = {lp->x, lp->y, lp->z};
+    float v_meas[3] = {lp->vx, lp->vy, lp->vz};
+
+    // Compensacion de retardo: el estado que llega describe donde estaba el dron
+    // hace un rato, no donde esta. Se propaga hacia delante con el mismo modelo
+    // del MPC antes de usarlo como condicion inicial. Con EKF2_EV_DELAY = 0 y la
+    // pose del SLAM 2D a ~10 Hz, el desfase es real y se ve como oscilacion.
+    if (delay_comp_s_ > 0.0) {
+      const float tau = static_cast<float>(delay_comp_s_);
+      for (int i = 0; i < 3; ++i) {
+        const float a_ef = a_prev_[i] + d_[i];
+        p_meas[i] += v_meas[i] * tau + 0.5f * a_ef * tau * tau;
+        v_meas[i] += a_ef * tau;
+      }
+    }
+
     const float p_ref[3] = {rx, ry, rz};
     const float v_ref[3] = {0.0f, 0.0f, 0.0f};
 
@@ -163,8 +240,11 @@ private:
     solve_ms_max_ = std::max(solve_ms_max_, r.solve_ms);
     if (++ciclos_ >= 100) {   // cada 5 s a 20 Hz
       RCLCPP_INFO(
-        get_logger(), "MPC: solver %.2f ms de media, %.2f ms maximo (%d ciclos); status %d",
-        solve_ms_acc_ / ciclos_, solve_ms_max_, ciclos_, r.status);
+        get_logger(),
+        "MPC: solver %.2f ms de media, %.2f ms maximo (%d ciclos); status %d; "
+        "perturbacion [%+.2f %+.2f %+.2f] m/s2; edad del estado %.0f ms",
+        solve_ms_acc_ / ciclos_, solve_ms_max_, ciclos_, r.status,
+        d_[0], d_[1], d_[2], 1e3 * edad_lp_s_);
       ciclos_ = 0;
       solve_ms_acc_ = 0.0;
       solve_ms_max_ = 0.0;
@@ -174,10 +254,44 @@ private:
     for (int i = 0; i < 3; ++i) {
       a_prev_[i] = acc[i];
     }
+    edad_lp_s_ = edad_lp_s;
     publicarDiagnostico(r, acc, p_meas, p_ref, lp->dist_bottom, frenando);
   }
 
   static float clamp(float v, float lo, float hi) {return std::max(lo, std::min(hi, v));}
+
+  // Observador de perturbacion constante: d integra la diferencia entre lo que
+  // el dron acelero de verdad y lo que el modelo predecia (a comandada + d).
+  // Es la pieza que le falta al triple integrador para no dejar sesgo
+  // permanente en el hold cuando hay un error constante de empuje, de masa o de
+  // bateria.
+  //
+  // Se adapta SOLO por encima de mpc_dist_min_agl_m. En tierra no se puede: con
+  // el estado de despegue de PX4 por debajo de 'rampup', el FC DESCARTA nuestro
+  // setpoint y lo sustituye por 100 m/s2 hacia abajo
+  // (MulticopterPositionControl.cpp del tag v1.14.3), asi que el residuo no
+  // mide nuestra perturbacion y el observador se iria a su tope.
+  void actualizarPerturbacion(
+    const px4_msgs::msg::VehicleLocalPosition * lp, double dt_s)
+  {
+    if (dist_gain_ <= 0.0) {
+      return;
+    }
+    const bool en_vuelo = lp->dist_bottom_valid && std::isfinite(lp->dist_bottom) &&
+      lp->dist_bottom > static_cast<float>(dist_min_agl_);
+    const bool dato_util = dt_s > 0.0 && dt_s <= 0.5 &&
+      std::isfinite(lp->ax) && std::isfinite(lp->ay) && std::isfinite(lp->az);
+    if (!en_vuelo || !dato_util || fallos_ > 0) {
+      return;   // tambien se congela si el solver va fallando: el residuo no vale
+    }
+    const float a_meas[3] = {lp->ax, lp->ay, lp->az};
+    const float tope = static_cast<float>(dist_max_);
+    for (int i = 0; i < 3; ++i) {
+      const float residuo = a_meas[i] - (a_prev_[i] + d_[i]);
+      d_[i] = clamp(
+        d_[i] + static_cast<float>(dist_gain_ * dt_s) * residuo, -tope, tope);
+    }
+  }
 
   // Diagnostico para el rosbag: con esto se afina el MPC despues del vuelo y se
   // compara contra el PID (tiempo de solver, aceleracion pedida, error).
@@ -190,7 +304,8 @@ private:
       "solve_ms", "status", "ok", "frenando",
       "acc_x", "acc_y", "acc_z",
       "err_x", "err_y", "err_z",
-      "vel_pred_z", "dist_bottom", "z_floor"};
+      "vel_pred_z", "dist_bottom", "z_floor",
+      "d_x", "d_y", "d_z", "edad_lp_ms"};
     constexpr size_t kN = sizeof(kEtiquetas) / sizeof(kEtiquetas[0]);
     m.layout.dim.resize(kN);
     for (size_t i = 0; i < kN; ++i) {
@@ -203,7 +318,8 @@ private:
       r.ok ? 1.0f : 0.0f, frenando ? 1.0f : 0.0f,
       acc[0], acc[1], acc[2],
       p_ref[0] - p_meas[0], p_ref[1] - p_meas[1], p_ref[2] - p_meas[2],
-      r.vel_pred[2], dist_bottom, lim_.z_floor_ned};
+      r.vel_pred[2], dist_bottom, lim_.z_floor_ned,
+      d_[0], d_[1], d_[2], static_cast<float>(1e3 * edad_lp_s_)};
     diag_pub_->publish(m);
   }
 
@@ -214,7 +330,16 @@ private:
   px4_drone::MpcLimits lim_;
   px4_drone::MpcWeights w_;
   double descent_agl_{0.25};
+  double dist_gain_{0.0};
+  double dist_max_{1.5};
+  double dist_min_agl_{0.35};
+  double delay_comp_s_{0.0};
+  float d_[3] = {0.0f, 0.0f, 0.0f};        // perturbacion estimada (NED, m/s^2)
   float a_prev_[3] = {0.0f, 0.0f, 0.0f};
+  rclcpp::Time ultimo_ciclo_{0, 0, RCL_ROS_TIME};
+  rclcpp::Time llegada_lp_{0, 0, RCL_ROS_TIME};
+  uint64_t ultimo_sello_lp_{0};
+  double edad_lp_s_{0.0};
   int fallos_{0};
   int ciclos_{0};
   double solve_ms_acc_{0.0};

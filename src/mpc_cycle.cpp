@@ -19,6 +19,7 @@ constexpr int NU = 3;   // jerk
 constexpr int NY = NX + NU;
 // Orden de constraints.idxbx del generador: [pz, vx, vy, vz, ax, ay, az]
 constexpr int NBX = 7;
+constexpr int NP = 3;   // perturbacion de aceleracion (parametro del modelo)
 }  // namespace
 
 struct MpcCycle::Impl
@@ -90,6 +91,22 @@ void MpcCycle::setLimits(const MpcLimits & l)
       impl_->cfg, impl_->dims, impl_->in, impl_->out, k, "lbu", const_cast<double *>(lbu));
     ocp_nlp_constraints_model_set(
       impl_->cfg, impl_->dims, impl_->in, impl_->out, k, "ubu", const_cast<double *>(ubu));
+  }
+}
+
+void MpcCycle::setDisturbance(const float d[3])
+{
+  if (!ready_) {
+    return;
+  }
+  double pd[NP];
+  for (int i = 0; i < NP; ++i) {
+    pd[i] = d[i];
+  }
+  // El parametro hay que ponerlo en todas las etapas, terminal incluida: el
+  // modelo lo usa en cada paso de la prediccion.
+  for (int k = 0; k <= impl_->N; ++k) {
+    px4_cycle_mpc_acados_update_params(impl_->capsule, k, pd, NP);
   }
 }
 

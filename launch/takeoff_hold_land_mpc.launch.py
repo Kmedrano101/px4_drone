@@ -66,6 +66,28 @@ def generate_launch_description():
         description=(
             'Barridos seguidos disparando para dar la parada. Con 3 se descarta la rafaga de retornos que levantan las helices al despegar; con 2 abortaba el ciclo (bags del 2026-10-16).'),
     )
+    dist_gain_arg = DeclareLaunchArgument(
+        'mpc_dist_gain', default_value='0.0',
+        description=(
+            'Ganancia del observador de perturbacion (1/s). 0 = apagado, que es el '
+            'MPC clasico. El tercer ciclo lo activa.'),
+    )
+    dist_max_arg = DeclareLaunchArgument(
+        'mpc_dist_max', default_value='1.5',
+        description='Tope de la perturbacion estimada (m/s2).',
+    )
+    dist_min_agl_arg = DeclareLaunchArgument(
+        'mpc_dist_min_agl_m', default_value='0.35',
+        description=(
+            'Altura sobre el suelo por encima de la cual se adapta. En tierra PX4 '
+            'descarta nuestro setpoint, asi que el residuo no vale.'),
+    )
+    delay_comp_arg = DeclareLaunchArgument(
+        'mpc_delay_comp_s', default_value='0.0',
+        description=(
+            'Retardo que se compensa propagando el estado medido (s). 0 = apagado. '
+            'Elegirlo con la edad del estado que el nodo registra, no a ojo.'),
+    )
     min_width_arg = DeclareLaunchArgument(
         'obstacle_min_width_m', default_value='0.15',
         description=(
@@ -113,6 +135,14 @@ def generate_launch_description():
                 LaunchConfiguration('obstacle_blind_radius_m'), value_type=float),
             'obstacle_debounce_scans': ParameterValue(
                 LaunchConfiguration('obstacle_debounce_scans'), value_type=int),
+            'mpc_dist_gain': ParameterValue(
+                LaunchConfiguration('mpc_dist_gain'), value_type=float),
+            'mpc_dist_max': ParameterValue(
+                LaunchConfiguration('mpc_dist_max'), value_type=float),
+            'mpc_dist_min_agl_m': ParameterValue(
+                LaunchConfiguration('mpc_dist_min_agl_m'), value_type=float),
+            'mpc_delay_comp_s': ParameterValue(
+                LaunchConfiguration('mpc_delay_comp_s'), value_type=float),
             'obstacle_min_width_m': ParameterValue(
                 LaunchConfiguration('obstacle_min_width_m'), value_type=float),
             'slam_health_enabled': ParameterValue(
@@ -136,6 +166,10 @@ def generate_launch_description():
         mpc_descent_agl_arg,
         blind_radius_arg,
         debounce_arg,
+        dist_gain_arg,
+        dist_max_arg,
+        dist_min_agl_arg,
+        delay_comp_arg,
         min_width_arg,
         slam_health_arg,
         run_bridge_arg,

@@ -8,8 +8,11 @@
 // generate_cycle_mpc.py). Aisla al nodo de los tipos de acados, que cambian
 // entre versiones: el solver se genera en cada maquina con su propia version.
 //
-// Modelo: triple integrador por eje en NED.
-//   x = [p(3), v(3), a(3)], u = jerk(3), dinamica p'=v, v'=a, a'=j
+// Modelo: triple integrador por eje en NED, con perturbacion como parametro.
+//   x = [p(3), v(3), a(3)], u = jerk(3), p = d(3)
+//   dinamica p'=v, v'=a+d, a'=j
+// Con d = 0 (el valor por defecto si nadie llama a setDisturbance) el modelo es
+// el triple integrador puro de siempre.
 // La salida util es la ACELERACION del siguiente paso, que es lo que se publica
 // al FC (ver TakeoffPositionHoldBase::publishAccelerationSetpoint).
 namespace px4_drone
@@ -61,6 +64,12 @@ public:
 
   void setLimits(const MpcLimits & lim);
   void setWeights(const MpcWeights & w);
+
+  // Perturbacion de aceleracion (NED, m/s^2) que el modelo suma a la
+  // aceleracion comandada: v' = a + d. La estima un observador en el nodo. Con
+  // d = 0 el comportamiento es el de antes, asi que el mismo solver sirve para
+  // las dos variantes.
+  void setDisturbance(const float d[3]);
 
   // p, v: estado medido (NED). a_prev: ultima aceleracion comandada, que hace
   // de tercer estado (el dron no mide su aceleracion deseada).

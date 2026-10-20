@@ -1,10 +1,24 @@
 #!/usr/bin/env python3
 """Genera con acados el solver MPC del ciclo arm-takeoff-hold-land-disarm.
 
-Modelo: TRIPLE integrador por eje, en NED.
+Modelo: TRIPLE integrador por eje, en NED, con perturbacion.
     estado  x = [px, py, pz, vx, vy, vz, ax, ay, az]   (9)
     control u = [jx, jy, jz]                            (3)   jerk
-    dinamica: p' = v,  v' = a,  a' = j
+    parametro p = [dx, dy, dz]                          (3)   perturbacion
+    dinamica: p' = v,  v' = a + d,  a' = j
+
+La perturbacion d es la diferencia entre la aceleracion que pedimos y la que el
+dron consigue de verdad: error del modelo de empuje (THR_MDL_FAC=0 deja el mapeo
+lineal), masa o bateria distintas, deriva del barometro. Sin ella el lazo se
+asienta en un equilibrio vecino al de la referencia -- sesgo permanente en el
+hold, que es justo una de las metricas que se quieren medir. Con d como
+parametro (no como estado) el tamano del QP no cambia y el coste de solver
+tampoco; la estima la hace un observador en el nodo. Es la construccion
+estandar de MPC "offset-free" (arXiv 2011.11104, revision de MPC para MAV).
+
+Con d = 0 el modelo es identico al anterior, asi que el MISMO solver sirve para
+la variante sin observador y para la que lo activa: un solo binario y una sola
+compilacion.
 
 Por que el jerk como control y no la aceleracion (que es lo que hace
 SUPER/px4_mpc_controller): en Offboard PX4 1.14.3 NO suaviza la trayectoria --
@@ -39,7 +53,7 @@ from casadi import SX, vertcat
 
 from acados_template import AcadosModel, AcadosOcp, AcadosOcpSolver
 
-NX, NU = 9, 3
+NX, NU, NP = 9, 3, 3
 
 
 def crear_modelo():
@@ -47,6 +61,7 @@ def crear_modelo():
     v = SX.sym("v", 3)
     a = SX.sym("a", 3)
     j = SX.sym("j", 3)
+    d = SX.sym("d", NP)          # perturbacion de aceleracion (parametro)
     x = vertcat(p, v, a)
     xdot = SX.sym("xdot", NX)
 
@@ -54,8 +69,9 @@ def crear_modelo():
     model.name = "px4_cycle_mpc"
     model.x = x
     model.u = j
+    model.p = d
     model.xdot = xdot
-    model.f_expl_expr = vertcat(v, a, j)
+    model.f_expl_expr = vertcat(v, a + d, j)
     model.f_impl_expr = xdot - model.f_expl_expr
     return model
 
@@ -71,6 +87,9 @@ def crear_ocp(N, dt):
     else:
         ocp.code_export_directory = "c_generated_code"
     ocp.dims.N = N
+    # Sin observador activo el nodo no escribe el parametro y queda en cero, con
+    # lo que el modelo es el de antes. Asi la variante C no cambia.
+    ocp.parameter_values = np.zeros(NP)
 
     # --- coste: seguimiento de [p, v, a] + penalizacion del jerk
     ny, ny_e = NX + NU, NX
@@ -147,9 +166,20 @@ def banco_de_pruebas(solver, N, dt):
         "estado violando el suelo (estimador malo)": (
             np.array([0.0, 0.0, 0.15, 0, 0, 0.4, 0, 0, 0]), np.array([0.0, 0.0, -1.0])),
     }
-    print(f"\n{'caso':<42} {'estado':>7} {'t_solve':>9}   primera aceleracion [m/s2]")
+    # El ultimo caso se repite con perturbacion para comprobar que el parametro
+    # llega al solver y mueve la solucion.
+    casos_d = {
+        "hold con 0.8 m/s2 de perturbacion hacia abajo": (
+            np.array([0.0, 0.0, -0.8, 0, 0, 0, 0, 0, 0]), np.array([0.0, 0.0, -0.8]),
+            np.array([0.0, 0.0, 0.8])),
+    }
+    print(f"\n{'caso':<46} {'estado':>7} {'t_solve':>9}   primera aceleracion [m/s2]")
     ok = True
-    for nombre, (x0, p_ref) in casos.items():
+    for nombre, caso in list(casos.items()) + list(casos_d.items()):
+        x0, p_ref = caso[0], caso[1]
+        d = caso[2] if len(caso) > 2 else np.zeros(NP)
+        for k in range(N + 1):
+            solver.set(k, "p", d)
         yref = np.concatenate([p_ref, np.zeros(6), np.zeros(NU)])
         for k in range(N):
             solver.set(k, "yref", yref)
@@ -162,7 +192,7 @@ def banco_de_pruebas(solver, N, dt):
         u0 = solver.get(0, "u")
         x1 = solver.get(1, "x")
         acc = x1[6:9]
-        print(f"{nombre:<42} {status:>7} {t_ms:7.2f} ms   "
+        print(f"{nombre:<46} {status:>7} {t_ms:7.2f} ms   "
               f"[{acc[0]:+.2f} {acc[1]:+.2f} {acc[2]:+.2f}]  jerk0=[{u0[0]:+.1f} {u0[1]:+.1f} {u0[2]:+.1f}]")
         ok &= status in (0, 2)  # 0 ok, 2 maxiter (aceptable en RTI)
     return ok

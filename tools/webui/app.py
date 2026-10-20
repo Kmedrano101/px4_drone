@@ -146,6 +146,22 @@ TESTS = {
             {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
+    "mpc_plus_cycle": {
+        "label": "Ciclo completo con MPC+ (perturbacion y retardo)",
+        "desc": "El MISMO nodo y el mismo ejecutable que 'Ciclo completo con MPC', con dos cosas activadas. Observador de perturbacion: el modelo pasa a v'=a+d y d estima la diferencia entre la aceleracion que se pide y la que el dron consigue (error del modelo de empuje, masa, bateria, deriva del baro). Sin eso un triple integrador deja sesgo permanente en el hold. Solo adapta por encima de la altura indicada, porque en tierra PX4 descarta nuestro setpoint. Compensacion de retardo: propaga el estado medido hacia delante antes de resolver; sale en 0 a proposito, hay que medir antes la edad del estado que el nodo registra. Con ganancia 0 y retardo 0 es exactamente el ciclo MPC. VUELO REAL.",
+        "launch_file": "takeoff_hold_land_mpc_plus.launch.py",
+        "node_exe": "takeoff_hold_land_mpc",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "takeoff_height_m", "label": "Altura (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "mpc_dist_gain", "label": "Ganancia del observador (1/s, 0 = apagado)", "default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1},
+            {"key": "mpc_dist_max", "label": "Tope de la perturbacion (m/s2)", "default": 1.5, "min": 0.1, "max": 5.0, "step": 0.1},
+            {"key": "mpc_dist_min_agl_m", "label": "Adaptar solo por encima de (m del suelo)", "default": 0.35, "min": 0.1, "max": 1.0, "step": 0.05},
+            {"key": "mpc_delay_comp_s", "label": "Retardo compensado (s, 0 = apagado; medirlo primero)", "default": 0.0, "min": 0.0, "max": 0.3, "step": 0.01},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
     "sensor_eval": {
         "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
         "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",

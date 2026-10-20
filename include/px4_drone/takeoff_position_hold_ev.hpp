@@ -84,6 +84,8 @@ public:
       declare_parameter<double>("obstacle_blind_radius_m", 0.35));
     cfg.debounce_scans = static_cast<int>(
       declare_parameter<int>("obstacle_debounce_scans", 3));
+    cfg.min_obstacle_width_m = static_cast<float>(
+      declare_parameter<double>("obstacle_min_width_m", 0.15));
     laser_yaw_rad_ = static_cast<float>(
       declare_parameter<double>("laser_yaw_offset_deg", 0.0) * M_PI / 180.0);
     laser_above_range_m_ = static_cast<float>(
@@ -96,6 +98,14 @@ public:
       refuseToRun(
         "obstacle_stop_distance_m debe ser 0 (desactivada) o >= 0.3 m (recibido " +
         std::to_string(cfg.stop_distance_m) + ").");
+      return;
+    }
+    if (!std::isfinite(cfg.min_obstacle_width_m) || cfg.min_obstacle_width_m < 0.0f ||
+      cfg.min_obstacle_width_m > 1.0f)
+    {
+      refuseToRun(
+        "obstacle_min_width_m debe ser finito y estar entre 0 (desactivado) y 1.0 m (recibido " +
+        std::to_string(cfg.min_obstacle_width_m) + ").");
       return;
     }
     if (cfg.debounce_scans < 1 || cfg.debounce_scans > 10) {
@@ -138,8 +148,9 @@ public:
       RCLCPP_WARN(
         get_logger(),
         "Zona ciega circular 360 grados: radio %.2f m (diametro %.2f m), centrada en el LiDAR. "
-        "Debounce %d barridos.",
-        cfg.blind_radius_m, 2.0f * cfg.blind_radius_m, cfg.debounce_scans);
+        "Debounce %d barridos. Ancho minimo de obstaculo %.2f m.",
+        cfg.blind_radius_m, 2.0f * cfg.blind_radius_m, cfg.debounce_scans,
+        cfg.min_obstacle_width_m);
     }
   }
 

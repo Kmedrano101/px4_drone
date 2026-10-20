@@ -51,6 +51,11 @@ def generate_launch_description():
         description=(
             'Barridos seguidos disparando para dar la parada. Con 3 se descarta la rafaga de retornos que levantan las helices al despegar; con 2 abortaba el ciclo (bags del 2026-10-16).'),
     )
+    min_width_arg = DeclareLaunchArgument(
+        'obstacle_min_width_m', default_value='0.15',
+        description=(
+            'Ancho real minimo (cuerda) de un grupo de rayos contiguos para creerse que hay un objeto. Un pilar de 0.40 m da 0.40 m; el polvo que levantan las helices dio 0.03-0.09 m en los bags del 2026-10-16. 0 desactiva el filtro.'),
+    )
     slam_health_arg = DeclareLaunchArgument(
         'slam_health_enabled', default_value='false',
         description=('Guarda de sigma y frescura de /pose del SLAM. Desactivada para '
@@ -93,6 +98,8 @@ def generate_launch_description():
                 LaunchConfiguration('obstacle_blind_radius_m'), value_type=float),
             'obstacle_debounce_scans': ParameterValue(
                 LaunchConfiguration('obstacle_debounce_scans'), value_type=int),
+            'obstacle_min_width_m': ParameterValue(
+                LaunchConfiguration('obstacle_min_width_m'), value_type=float),
             'slam_health_enabled': ParameterValue(
                 LaunchConfiguration('slam_health_enabled'), value_type=bool),
             'topic_version_suffix': LaunchConfiguration('topic_version_suffix'),
@@ -106,6 +113,7 @@ def generate_launch_description():
         obstacle_stop_arg,
         blind_radius_arg,
         debounce_arg,
+        min_width_arg,
         slam_health_arg,
         run_bridge_arg,
         topic_version_suffix_arg,

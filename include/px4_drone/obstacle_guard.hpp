@@ -45,6 +45,12 @@ struct ObstacleGuardConfig
   // Radio del circulo centrado en el LiDAR que se ignora en los 360 grados.
   // 0 desactiva la zona ciega; el nodo EV usa 0.35 m (diametro 0.70 m).
   float blind_radius_m{0.0f};
+  // Ancho real minimo (cuerda) que tiene que medir un grupo de rayos contiguos
+  // para creerse que hay un objeto. El tamano angular de un objeto depende de la
+  // distancia, asi que exigir un numero fijo de rayos (min_points) es ciego a
+  // ella: pide lo mismo a 0.5 m que a 3 m. La cuerda no. 0 desactiva el filtro;
+  // el nodo EV usa 0.15 m (reports/2026-10-20_falsos-obstaculos-al-despegar.md).
+  float min_obstacle_width_m{0.0f};
 };
 
 struct ScanInput
@@ -73,6 +79,7 @@ struct ObstacleStatus
   float trigger_range_m{0.0f};      // distancia del sector que dispara
   float trigger_bearing_deg{0.0f};
   int floor_rejected{0};         // rayos descartados por ser suelo
+  int width_rejected{0};         // rayos en grupos mas estrechos que el ancho minimo
   float valid_fraction{0.0f};    // rayos validos / total
 };
 
@@ -93,6 +100,8 @@ private:
   ObstacleGuardConfig cfg_;
   std::vector<std::deque<std::pair<double, float>>> history_;  // por sector: (t, distancia)
   std::vector<std::vector<float>> sector_ranges_;  // reutilizado entre barridos
+  std::vector<std::pair<std::size_t, float>> kept_;  // (indice de rayo, rango) tras los filtros
+  std::vector<std::vector<std::size_t>> groups_;     // grupos de rayos contiguos (indices en kept_)
   int consecutive_{0};
   ObstacleStatus last_;
 };

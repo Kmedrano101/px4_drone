@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <vector>
 
 namespace px4_drone
 {
@@ -14,6 +15,11 @@ constexpr float kTwoPi = 2.0f * kPi;
 // Holgura sobre el salto maximo fisico entre dos barridos: ruido del sensor y
 // cambio del rayo que queda como min_points-esimo dentro del sector.
 constexpr float kJumpToleranceM = 0.05f;
+// Salto de rango que parte un grupo de rayos contiguos en dos objetos distintos.
+constexpr float kClusterGapM = 0.08f;
+// Huecos de indice tolerados dentro de un grupo: el filtro de suelo o un rayo
+// sin retorno agujerean un objeto real sin partirlo de verdad.
+constexpr std::size_t kClusterIndexGap = 2;
 
 float wrapTwoPi(float a)
 {
@@ -62,6 +68,8 @@ ObstacleStatus ObstacleGuard::update(const ScanInput & in)
   for (auto & v : sector_ranges_) {
     v.clear();
   }
+  kept_.clear();
+  groups_.clear();
 
   // Componente vertical (NED, positiva hacia abajo) de un rayo horizontal del
   // cuerpo tras aplicar roll y pitch: tercera fila de R = Rz Ry Rx, que no
@@ -94,13 +102,77 @@ ObstacleStatus ObstacleGuard::update(const ScanInput & in)
       }
     }
 
-    std::size_t s = static_cast<std::size_t>(wrapTwoPi(a) / sector_width);
-    if (s >= n_sectors) {
-      s = n_sectors - 1;
-    }
-    sector_ranges_[s].push_back(r);
+    kept_.push_back({i, r});
   }
   st.valid_fraction = in.count > 0 ? static_cast<float>(valid) / static_cast<float>(in.count) : 0.0f;
+
+  // Un objeto es un grupo de rayos contiguos de rango parecido. Se mide su
+  // cuerda real y se descarta el que no llegue al ancho minimo: separa polvo de
+  // obstaculo sin depender de la distancia. En los bags del 2026-10-16 el polvo
+  // que levantan las helices da cuerdas de 0.03-0.09 m dentro de la banda que
+  // dispara; el obstaculo real del bag del accidente da 1.18-1.83 m y un pilar
+  // de 0.40 m a 1 m da 0.40 m.
+  const bool width_check = cfg_.min_obstacle_width_m > 0.0f &&
+    std::fabs(in.angle_increment) > 0.0f && !kept_.empty();
+  if (width_check) {
+    groups_.emplace_back();
+    groups_.back().push_back(0);
+    for (std::size_t k = 1; k < kept_.size(); ++k) {
+      const bool join = kept_[k].first - kept_[k - 1].first <= kClusterIndexGap &&
+        std::fabs(kept_[k].second - kept_[k - 1].second) <= kClusterGapM;
+      if (!join) {
+        groups_.emplace_back();
+      }
+      groups_.back().push_back(k);
+    }
+    // El barrido cierra el circulo: si el ultimo grupo se toca con el primero al
+    // cruzar el indice 0, son el mismo objeto.
+    if (groups_.size() > 1 && in.count > 0) {
+      const auto & f = kept_.front();
+      const auto & l = kept_.back();
+      if ((in.count - 1 - l.first) + f.first + 1 <= kClusterIndexGap &&
+        std::fabs(l.second - f.second) <= kClusterGapM)
+      {
+        auto & first = groups_.front();
+        const auto & last = groups_.back();
+        first.insert(first.end(), last.begin(), last.end());
+        groups_.pop_back();
+      }
+    }
+  }
+
+  const auto sector_of = [&](std::size_t ray_index) {
+      const float a = in.angle_min + static_cast<float>(ray_index) * in.angle_increment +
+        in.laser_yaw_rad;
+      const std::size_t s = static_cast<std::size_t>(wrapTwoPi(a) / sector_width);
+      return s >= n_sectors ? n_sectors - 1 : s;
+    };
+
+  if (!width_check) {
+    for (const auto & kr : kept_) {
+      sector_ranges_[sector_of(kr.first)].push_back(kr.second);
+    }
+  } else {
+    std::vector<float> rs;
+    for (const auto & g : groups_) {
+      rs.clear();
+      for (const std::size_t k : g) {
+        rs.push_back(kept_[k].second);
+      }
+      std::nth_element(rs.begin(), rs.begin() + static_cast<std::ptrdiff_t>(rs.size() / 2),
+        rs.end());
+      const float med = rs[rs.size() / 2];
+      const float arc = static_cast<float>(g.size()) * std::fabs(in.angle_increment);
+      const float chord = 2.0f * med * std::sin(std::min(arc, kPi) * 0.5f);
+      if (chord < cfg_.min_obstacle_width_m) {
+        st.width_rejected += static_cast<int>(g.size());
+        continue;
+      }
+      for (const std::size_t k : g) {
+        sector_ranges_[sector_of(kept_[k].first)].push_back(kept_[k].second);
+      }
+    }
+  }
 
   st.nearest_m = nan;
   float worst_excess = std::numeric_limits<float>::infinity();  // distancia - umbral; <0 dispara

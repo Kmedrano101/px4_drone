@@ -9,3 +9,4 @@ log/
 # acados (scripts/mpc/generate_cycle_mpc.py). Versionar el generado romperia
 # los builds con otra version instalada.
 scripts/mpc/generated/
+scripts/mpc/generated_ctbr/

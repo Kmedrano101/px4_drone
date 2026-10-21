@@ -361,6 +361,47 @@ def _start_bag(run_id):
     return bag_path, bag_proc
 
 
+def _ros_env_prefix():
+    """El mismo entorno con el que se lanzan las pruebas, para que cualquier
+    comprobacion previa vea exactamente lo que vera el launch."""
+    return (
+        f"source /opt/ros/jazzy/setup.bash && "
+        f"source {EXTRA_WS}/install/setup.bash && "
+        f"source {WORKSPACE}/install/setup.bash && "
+        f"export ROS_DOMAIN_ID=10 && "
+        f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
+        f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
+    )
+
+
+def _dds_unavailable_reason(uri_override=None):
+    """None si DDS puede crear un participante con el entorno de las pruebas;
+    si no, el motivo en una linea.
+
+    Por que existe: el 2026-10-20 en el campo cinco corridas seguidas murieron
+    en el launch con "eth0: does not match an available interface" y nadie lo
+    vio hasta leer los logs en casa. Un `--show-args` no lo detecta (no crea
+    participante), y `ros2 topic list` a secas tampoco (habla con el daemon,
+    que tiene su propia configuracion): hay que crear un nodo de verdad con el
+    entorno de verdad. Tarda 1-3 s; se paga una vez por lanzamiento."""
+    cmd = _ros_env_prefix()
+    if uri_override:
+        cmd += f"export CYCLONEDDS_URI={shlex.quote(uri_override)} && "
+    cmd += "exec ros2 topic list --no-daemon --spin-time 1"
+    try:
+        r = subprocess.run(["bash", "-c", cmd], capture_output=True, text=True, timeout=20,
+                           cwd=WORKSPACE)
+    except subprocess.TimeoutExpired:
+        return "DDS no respondio en 20 s al crear un participante"
+    out = (r.stdout or "") + (r.stderr or "")
+    if r.returncode == 0 and "failed to create domain" not in out:
+        return None
+    detalle = next((ln.strip() for ln in out.splitlines()
+                    if "does not match" in ln or "failed to create" in ln), "").split("]")[-1].strip()
+    return ("DDS no puede crear el dominio" + (f": {detalle}" if detalle else "") +
+            " (revisar config/cyclonedds-pi.xml y las interfaces de red con `ip -br addr`)")
+
+
 @app.route("/api/launch", methods=["POST"])
 def launch():
     body = request.json or {}
@@ -375,6 +416,11 @@ def launch():
     reason = _test_unavailable_reason(test)
     if reason is not None:
         return jsonify({"error": f"No se puede lanzar: {reason}"}), 409
+
+    if "script" not in test:   # las pruebas por MAVLink no usan ROS
+        reason = _dds_unavailable_reason()
+        if reason is not None:
+            return jsonify({"error": f"No se puede lanzar: {reason}"}), 409
 
     with _lock:
         if _state["proc"] is not None and _state["proc"].poll() is None:

@@ -1,9 +1,25 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Configuracion de CycloneDDS del escritorio (eno2 = Ethernet al laboratorio).
+
+  Las interfaces van con presence_required="false": Cyclone usa las que
+  existan y sigue adelante con las que no. Sin eso, el 2026-10-20 en el campo
+  (sin Ethernet: la Pi va con su propio AP por wlan0) NINGUN nodo ROS pudo
+  arrancar — "eth0: does not match an available interface" -> "failed to
+  create domain" — y cinco corridas murieron en el launch sin volar.
+
+  Se clava eno2 a proposito: sin clavar, Cyclone podria elegir uno de los
+  puentes de docker y no ver nunca a la Pi.
+
+  Verificado con ros2 topic list (sin daemon) en los tres casos, 2026-10-21.
+-->
 <CycloneDDS xmlns="https://cdds.io/config">
   <Domain id="any">
     <General>
       <Interfaces>
-        <NetworkInterface name="eno2" multicast="true"/>
+        <NetworkInterface name="eno2" presence_required="false" multicast="true"/>
+        <NetworkInterface name="wlo1" presence_required="false" multicast="true"/>
+        <NetworkInterface name="lo" presence_required="false" multicast="true"/>
       </Interfaces>
       <AllowMulticast>true</AllowMulticast>
     </General>

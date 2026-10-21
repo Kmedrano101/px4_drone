@@ -1,9 +1,27 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Configuracion de CycloneDDS de la Pi.
+
+  Las interfaces van con presence_required="false": Cyclone usa las que
+  existan y sigue adelante con las que no. Sin eso, el 2026-10-20 en el campo
+  (sin Ethernet: la Pi va con su propio AP por wlan0) NINGUN nodo ROS pudo
+  arrancar — "eth0: does not match an available interface" -> "failed to
+  create domain" — y cinco corridas murieron en el launch sin volar.
+
+  Con eth0 y wlan0 arriba Cyclone usa las dos (el escritorio ve los topics por
+  Ethernet, el movil por el AP). Con solo una, esa. Sin ninguna, lo: todos los
+  participantes DDS viven en la propia Pi (el FC entra por el agente XRCE en
+  serie), asi que el vuelo no necesita red.
+
+  Verificado con ros2 topic list (sin daemon) en los tres casos, 2026-10-21.
+-->
 <CycloneDDS xmlns="https://cdds.io/config">
   <Domain id="any">
     <General>
       <Interfaces>
-        <NetworkInterface name="eth0" multicast="true"/>
+        <NetworkInterface name="eth0" presence_required="false" multicast="true"/>
+        <NetworkInterface name="wlan0" presence_required="false" multicast="true"/>
+        <NetworkInterface name="lo" presence_required="false" multicast="true"/>
       </Interfaces>
       <AllowMulticast>true</AllowMulticast>
     </General>

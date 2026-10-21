@@ -211,6 +211,33 @@ TESTS = {
             {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada: banco)", "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
+    "bench_mpc_plus": {
+        "label": "BANCO sin helices: ciclo MPC+ hasta el TAKEOFF, desarme forzado a los N s",
+        "desc": "SOLO PARA BANCO, DRON SUJETO Y SIN HELICES. El mismo binario MPC con el observador de perturbacion activo. Lo que anade al banco MPC: la linea 'perturbacion [x y z]' del log TIENE que seguir en cero, porque en el suelo dist_bottom < 0.35 m y el observador no debe adaptar (PX4 descarta nuestro setpoint antes del despegue y el residuo no vale). Si crece, la puerta de altura falla: parar y avisar. N segundos despues del TAKEOFF, desarme forzado y fin sin LAND. NO USAR EN CAMPO.",
+        "launch_file": "takeoff_hold_land_mpc_plus.launch.py",
+        "node_exe": "takeoff_hold_land_mpc",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "bench_disarm_after_s", "label": "Desarme forzado tras el TAKEOFF (s)", "default": 5.0, "min": 2.0, "max": 30.0, "step": 0.5},
+            {"key": "takeoff_height_m", "label": "Altura pedida (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s, no se alcanza en banco)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "mpc_dist_gain", "label": "Ganancia del observador (1/s)", "default": 0.5, "min": 0.0, "max": 5.0, "step": 0.1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada: banco)", "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
+    "bench_ctbr": {
+        "label": "BANCO sin helices: ciclo CTBR hasta el TAKEOFF, desarme forzado a los N s",
+        "desc": "SOLO PARA BANCO, DRON SUJETO Y SIN HELICES. El CTBR NO engancha en banco (solo lo hace en el hold, que no se alcanza): hasta el TAKEOFF se comporta como el ciclo PID. Lo que se prueba es lo que nunca se ha probado con un FC real: que el nodo arranca, carga el solver CTBR, recibe la actitud y no se cae. Buscar en el log 'CTBR: NMPC con actitud' al arrancar y que NO aparezca 'CTBR ENGANCHADO'. N segundos despues del TAKEOFF, desarme forzado y fin sin LAND. NO USAR EN CAMPO.",
+        "launch_file": "takeoff_hold_land_ctbr.launch.py",
+        "node_exe": "takeoff_hold_land_ctbr",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "bench_disarm_after_s", "label": "Desarme forzado tras el TAKEOFF (s)", "default": 5.0, "min": 2.0, "max": 30.0, "step": 0.5},
+            {"key": "takeoff_height_m", "label": "Altura pedida (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s, no se alcanza en banco)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada: banco)", "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
     "sensor_eval": {
         "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
         "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",

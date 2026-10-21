@@ -75,6 +75,13 @@ def generate_launch_description():
         'ctbr_max_tilt_deg', default_value='20.0',
         description='Inclinacion a partir de la cual se suelta y vuelve a mandar PX4.',
     )
+    bench_arg = DeclareLaunchArgument(
+        'bench_disarm_after_s', default_value='0.0',
+        description=(
+            'MODO BANCO SIN HELICES: segundos tras el TAKEOFF en los que el nodo manda un '
+            'desarme FORZADO y termina. 0 = apagado (campo). En banco el CTBR nunca engancha '
+            '(solo lo hace en el hold); lo que se prueba es que el nodo arranca y no se cae.'),
+    )
     min_width_arg = DeclareLaunchArgument(
         'obstacle_min_width_m', default_value='0.15',
         description=(
@@ -130,6 +137,8 @@ def generate_launch_description():
                 LaunchConfiguration('ctbr_engage_delay_s'), value_type=float),
             'ctbr_max_tilt_deg': ParameterValue(
                 LaunchConfiguration('ctbr_max_tilt_deg'), value_type=float),
+            'bench_disarm_after_s': ParameterValue(
+                LaunchConfiguration('bench_disarm_after_s'), value_type=float),
             'obstacle_min_width_m': ParameterValue(
                 LaunchConfiguration('obstacle_min_width_m'), value_type=float),
             'slam_health_enabled': ParameterValue(
@@ -149,6 +158,7 @@ def generate_launch_description():
         thr_hover_arg,
         engage_arg,
         tilt_arg,
+        bench_arg,
         min_width_arg,
         slam_health_arg,
         run_bridge_arg,

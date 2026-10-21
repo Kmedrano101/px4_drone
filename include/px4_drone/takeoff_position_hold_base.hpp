@@ -210,6 +210,9 @@ protected:
     float param5 = 0.0f, float param6 = 0.0f, float param7 = 0.0f);
   void vehicleStatusCallback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
   void avisarSiElFcNoHabla() const;
+  // Modo banco (sin helices): true si acaba de mandar el desarme forzado y el
+  // ciclo no debe seguir. Ver bench_disarm_after_s_.
+  bool paradaDeBancoVencida();
   void vehicleLocalPositionCallback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
   void vehicleCommandAckCallback(const px4_msgs::msg::VehicleCommandAck::SharedPtr msg);
   // true si el FC ya no esta en OFFBOARD o reporta failsafe: el piloto (RC)
@@ -271,6 +274,16 @@ private:
   bool ok_to_run_{true};
   State state_{State::kWaitPositionSource};
   uint64_t cycle_count_{0};
+  // MODO BANCO SIN HELICES. 0 = apagado (campo). Si es > 0, ese numero de
+  // segundos despues de entrar en TAKEOFF el nodo manda un desarme FORZADO
+  // (param2 = 21196: PX4 lo acepta en vuelo, sin el responde "Disarming
+  // denied! Not landed"). Sin helices el dron no sube, el error de altura crece
+  // y el integrador de PX4 deja los motores al 100 % (~29 000 rpm) hasta que
+  // alguien pulse el kill. Esto lo hace solo, a tiempo, y deja el ciclo en
+  // kFinished sin pedir LAND (el detector de aterrizaje no dispararia).
+  double bench_disarm_after_s_{0.0};
+  rclcpp::Time takeoff_started_{0, 0, RCL_ROS_TIME};
+  int bench_disarm_sends_{0};
   uint8_t last_nav_state_{255};
   uint8_t last_nav_state_user_intention_{255};
   uint8_t last_arming_state_{0};

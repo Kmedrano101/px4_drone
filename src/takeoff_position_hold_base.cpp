@@ -44,10 +44,26 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
   std::signal(SIGUSR2, [](int) {g_user_request.store(kUserLandRequest);});
 
   const bool confirm_takeoff = declare_parameter<bool>("confirm_takeoff", false);
+  bench_disarm_after_s_ = declare_parameter<double>("bench_disarm_after_s", 0.0);
   // Ver comentario equivalente en offboard_control.cpp: "" para firmware
   // v1.14 (default, FC actual), "_v1" para v1.17 (HKUST_NXT_DUAL).
   const std::string v = declare_parameter<std::string>("topic_version_suffix", "");
 
+  if (bench_disarm_after_s_ != 0.0 && (bench_disarm_after_s_ < 2.0 || bench_disarm_after_s_ > 30.0)) {
+    RCLCPP_FATAL(
+      get_logger(),
+      "bench_disarm_after_s debe ser 0 (campo) o estar entre 2 y 30 s (banco). Nodo detenido.");
+    ok_to_run_ = false;
+    return;
+  }
+  if (bench_disarm_after_s_ > 0.0) {
+    RCLCPP_ERROR(
+      get_logger(),
+      "MODO BANCO SIN HELICES: %.1f s despues del TAKEOFF se manda DESARME FORZADO (21196) y el "
+      "ciclo termina sin LAND. Es para comprobar la secuencia con el dron sujeto y SIN HELICES. "
+      "NO USAR EN CAMPO: en vuelo real desarmaria el dron en el aire.",
+      bench_disarm_after_s_);
+  }
   if (!confirm_takeoff) {
     RCLCPP_FATAL(
       get_logger(),
@@ -124,6 +140,10 @@ TakeoffPositionHoldBase::TakeoffPositionHoldBase(
 void TakeoffPositionHoldBase::onTimer()
 {
   if (handleUserRequest()) {
+    ++cycle_count_;
+    return;
+  }
+  if (paradaDeBancoVencida()) {
     ++cycle_count_;
     return;
   }
@@ -261,6 +281,7 @@ void TakeoffPositionHoldBase::onTimer()
 
             state_ = State::kTakeoff;
             cycle_count_ = 0;
+            takeoff_started_ = now();
           } else if (cycle_count_ >= arm_sent_cycle_ + kArmConfirmTimeoutCycles) {
             RCLCPP_ERROR(
               get_logger(),
@@ -643,6 +664,50 @@ void TakeoffPositionHoldBase::publishVehicleCommand(
 // la fuente de posicion: es que el FC no se ve. Las dos causas que ya han
 // pasado se dicen por su nombre, con el dominio que usa este proceso, para
 // que el log del campo sea suficiente sin volver a casa a leerlo.
+bool TakeoffPositionHoldBase::paradaDeBancoVencida()
+{
+  if (bench_disarm_after_s_ <= 0.0 || takeoff_started_.nanoseconds() == 0) {
+    return false;
+  }
+  if (bench_disarm_sends_ > 0) {
+    // Ya se mando. Se repite UNA vez mas por si el primero se perdio, y luego
+    // el ciclo queda terminado: no se publica nada mas.
+    if (bench_disarm_sends_ == 1) {
+      publishVehicleCommand(
+        VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+        VehicleCommand::ARMING_ACTION_DISARM, 21196.0f);
+      ++bench_disarm_sends_;
+    }
+    return true;
+  }
+  switch (state_) {
+    case State::kTakeoff:
+    case State::kHold:
+    case State::kPattern:
+    case State::kObstacleStop:
+    case State::kUserHold:
+    case State::kControlledDescent:
+    case State::kLand:
+      break;
+    default:
+      return false;   // antes del TAKEOFF o ya terminado: no aplica
+  }
+  const double t = (now() - takeoff_started_).seconds();
+  if (t < bench_disarm_after_s_) {
+    return false;
+  }
+  RCLCPP_ERROR(
+    get_logger(),
+    "MODO BANCO: %.1f s desde el TAKEOFF. DESARME FORZADO (21196) y fin del ciclo. "
+    "Sin helices el dron no sube y los motores irian al 100 %%; esto los para a tiempo.", t);
+  publishVehicleCommand(
+    VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM,
+    VehicleCommand::ARMING_ACTION_DISARM, 21196.0f);
+  bench_disarm_sends_ = 1;
+  state_ = State::kFinished;
+  return true;
+}
+
 void TakeoffPositionHoldBase::avisarSiElFcNoHabla() const
 {
   if (last_nav_state_ != 255) {

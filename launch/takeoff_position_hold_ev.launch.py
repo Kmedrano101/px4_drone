@@ -51,6 +51,13 @@ def generate_launch_description():
         description=(
             'Barridos seguidos disparando para dar la parada. Con 3 se descarta la rafaga de retornos que levantan las helices al despegar; con 2 abortaba el ciclo (bags del 2026-10-16).'),
     )
+    bench_arg = DeclareLaunchArgument(
+        'bench_disarm_after_s', default_value='0.0',
+        description=(
+            'MODO BANCO SIN HELICES: segundos tras el TAKEOFF en los que el nodo manda un '
+            'desarme FORZADO y termina. 0 = apagado (campo). Sin helices el integrador de PX4 '
+            'lleva los motores al 100 por ciento; esto los para solo. NO usar en vuelo real.'),
+    )
     min_width_arg = DeclareLaunchArgument(
         'obstacle_min_width_m', default_value='0.15',
         description=(
@@ -98,6 +105,8 @@ def generate_launch_description():
                 LaunchConfiguration('obstacle_blind_radius_m'), value_type=float),
             'obstacle_debounce_scans': ParameterValue(
                 LaunchConfiguration('obstacle_debounce_scans'), value_type=int),
+            'bench_disarm_after_s': ParameterValue(
+                LaunchConfiguration('bench_disarm_after_s'), value_type=float),
             'obstacle_min_width_m': ParameterValue(
                 LaunchConfiguration('obstacle_min_width_m'), value_type=float),
             'slam_health_enabled': ParameterValue(
@@ -113,6 +122,7 @@ def generate_launch_description():
         obstacle_stop_arg,
         blind_radius_arg,
         debounce_arg,
+        bench_arg,
         min_width_arg,
         slam_health_arg,
         run_bridge_arg,

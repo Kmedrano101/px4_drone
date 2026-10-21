@@ -185,6 +185,32 @@ TESTS = {
             {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, LiDAR 2D 360, 0 = desactivada)", "default": 1.0, "min": 0.0, "max": 3.0, "step": 0.1},
         ],
     },
+    "bench_pid": {
+        "label": "BANCO sin helices: ciclo PID hasta el TAKEOFF, desarme forzado a los N s",
+        "desc": "SOLO PARA BANCO, DRON SUJETO Y SIN HELICES. Mismo ciclo PID (LiDAR 2D + SLAM + EV, OFFBOARD, switch del RC, ARM, TAKEOFF) pero N segundos despues del TAKEOFF el nodo manda un DESARME FORZADO (codigo 21196 de PX4) y termina sin LAND. Sin helices el dron no sube, el error de altura crece y el integrador de PX4 deja los motores al 100 por ciento: esto los para solo, sin depender del reflejo con el kill. El kill del RC (ch8) sigue siendo la red de seguridad. Parada por obstaculo a 0 porque en el laboratorio hay paredes a menos de 1 m. NO USAR EN CAMPO: en vuelo real desarmaria el dron en el aire.",
+        "launch_file": "takeoff_position_hold_ev.launch.py",
+        "node_exe": "takeoff_position_hold_ev",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "bench_disarm_after_s", "label": "Desarme forzado tras el TAKEOFF (s)", "default": 5.0, "min": 2.0, "max": 30.0, "step": 0.5},
+            {"key": "takeoff_height_m", "label": "Altura pedida (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s, no se alcanza en banco)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada: banco)", "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
+    "bench_mpc": {
+        "label": "BANCO sin helices: ciclo MPC hasta el TAKEOFF, desarme forzado a los N s",
+        "desc": "SOLO PARA BANCO, DRON SUJETO Y SIN HELICES. Igual que la tarjeta de banco PID pero con el MPC publicando ACELERACION: comprueba ademas que el solver corre con datos reales (lee 'MPC: solver X ms' en el log) y que PX4 acepta el modo acceleration. N segundos despues del TAKEOFF, desarme forzado y fin sin LAND. El kill del RC (ch8) sigue siendo la red de seguridad. NO USAR EN CAMPO.",
+        "launch_file": "takeoff_hold_land_mpc.launch.py",
+        "node_exe": "takeoff_hold_land_mpc",  # recibe HOLD (SIGUSR1) / ATERRIZAR (SIGUSR2)
+        "needs_confirm_takeoff": True,
+        "params": [
+            {"key": "bench_disarm_after_s", "label": "Desarme forzado tras el TAKEOFF (s)", "default": 5.0, "min": 2.0, "max": 30.0, "step": 0.5},
+            {"key": "takeoff_height_m", "label": "Altura pedida (m)", "default": 0.8, "min": 0.3, "max": 1.0, "step": 0.1},
+            {"key": "hold_seconds", "label": "Hold (s, no se alcanza en banco)", "default": 30.0, "min": 2, "max": 120, "step": 1},
+            {"key": "obstacle_stop_distance_m", "label": "Parada por obstaculo (m, 0 = desactivada: banco)", "default": 0.0, "min": 0.0, "max": 3.0, "step": 0.1},
+        ],
+    },
     "sensor_eval": {
         "label": "Evaluar flujo optico + LiDAR 1D (a mano)",
         "desc": "Dron DESARMADO en la mano, cable USB-C del FC a la Pi. Mide con cinta la altura de la lente del sensor al suelo. Fase quieto: ruido y sesgo del LiDAR, deriva del flujo. Fase mover: lleva el dron hacia el morro la distancia indicada por la cinta, nivelado y a la misma altura. Repite a varias alturas para sacar la curva de error. Solo lectura: no arma ni cambia parametros.",

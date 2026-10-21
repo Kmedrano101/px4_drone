@@ -33,10 +33,10 @@ def generate_launch_description():
         ),
     )
 
-    slam_share = get_package_share_directory('px4_drone_slam')
+    slam_share = get_package_share_directory('px4_drone')
     slam_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(slam_share, 'launch', 'slam_test.launch.py')
+            os.path.join(slam_share, 'launch', 'slam_ld19.launch.py')
         )
     )
 

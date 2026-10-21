@@ -27,4 +27,7 @@
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  <exec_depend>slam_toolbox</exec_depend>
+  <exec_depend>ldlidar</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 </package>

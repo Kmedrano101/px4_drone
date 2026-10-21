@@ -94,6 +94,19 @@ target_include_directories(obstacle_guard_replay PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
 install(TARGETS obstacle_guard_replay DESTINATION lib/${PROJECT_NAME})
 
+# --- Relay de barridos a tamano fijo (LD19 -> slam_toolbox) ---
+# El LD19 publica un numero variable de rayos y karto rechaza los que no
+# coinciden con el primero; con esto pasan todos. Ver include/px4_drone/scan_fixed_size.hpp.
+add_executable(scan_fixed_size src/scan_fixed_size_node.cpp)
+target_include_directories(scan_fixed_size PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(scan_fixed_size rclcpp sensor_msgs)
+install(TARGETS scan_fixed_size DESTINATION lib/${PROJECT_NAME})
+
+add_executable(test_scan_fixed_size tools/scan_fixed_size/test_scan_fixed_size.cpp)
+target_include_directories(test_scan_fixed_size PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+ament_target_dependencies(test_scan_fixed_size sensor_msgs)
+install(TARGETS test_scan_fixed_size DESTINATION lib/${PROJECT_NAME})
+
 # --- Nodo MPC (opcional) ---
 # Se compila solo si (a) acados esta instalado (ACADOS_SOURCE_DIR o ~/acados) y
 # (b) el solver se ha generado en ESTA maquina con

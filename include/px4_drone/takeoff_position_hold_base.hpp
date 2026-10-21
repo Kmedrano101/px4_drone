@@ -209,6 +209,7 @@ protected:
     uint16_t command, float param1 = 0.0f, float param2 = 0.0f, float param4 = 0.0f,
     float param5 = 0.0f, float param6 = 0.0f, float param7 = 0.0f);
   void vehicleStatusCallback(const px4_msgs::msg::VehicleStatus::SharedPtr msg);
+  void avisarSiElFcNoHabla() const;
   void vehicleLocalPositionCallback(const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg);
   void vehicleCommandAckCallback(const px4_msgs::msg::VehicleCommandAck::SharedPtr msg);
   // true si el FC ya no esta en OFFBOARD o reporta failsafe: el piloto (RC)

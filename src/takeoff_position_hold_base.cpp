@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdlib>
 #include <csignal>
 #include <limits>
 
@@ -141,7 +142,10 @@ void TakeoffPositionHoldBase::onTimer()
             get_logger(),
             "Fuente de posicion (%s) no disponible tras %.0f s. Abortando (no se toca OFFBOARD/ARM).",
             positionSourceName().c_str(), kPositionSourceTimeoutCycles / kLoopRateHz);
+          avisarSiElFcNoHabla();
           state_ = State::kFinished;
+        } else if (cycle_count_ == static_cast<uint64_t>(5 * kLoopRateHz)) {
+          avisarSiElFcNoHabla();   // a los 5 s, para que se lea en el campo antes del abort
         }
         break;
       }
@@ -633,6 +637,26 @@ void TakeoffPositionHoldBase::publishVehicleCommand(
   msg.from_external = true;
   msg.timestamp = static_cast<uint64_t>(get_clock()->now().nanoseconds() / 1000);
   vehicle_command_pub_->publish(msg);
+}
+
+// Si en todo este tiempo no ha llegado NI UN vehicle_status, el problema no es
+// la fuente de posicion: es que el FC no se ve. Las dos causas que ya han
+// pasado se dicen por su nombre, con el dominio que usa este proceso, para
+// que el log del campo sea suficiente sin volver a casa a leerlo.
+void TakeoffPositionHoldBase::avisarSiElFcNoHabla() const
+{
+  if (last_nav_state_ != 255) {
+    return;   // algo del FC ha llegado: no es esto
+  }
+  const char * dom = std::getenv("ROS_DOMAIN_ID");
+  RCLCPP_ERROR(
+    get_logger(),
+    "NO HA LLEGADO NINGUN MENSAJE DEL FC (vehicle_status). Este proceso esta en "
+    "ROS_DOMAIN_ID=%s. Causas ya vistas: (1) UXRCE_DDS_DOM_ID del FC distinto de ese dominio "
+    "-- el dominio lo fija el FC, ver docs/CONFIGURACION_OFFBOARD_RPI4.md; (2) el agente XRCE "
+    "sin sesion con el FC -- en NSH: 'uxrce_dds_client status' debe decir 'connected'. "
+    "Comprobar con tools/check_dds_domain.sh.",
+    dom != nullptr ? dom : "(sin definir = 0)");
 }
 
 void TakeoffPositionHoldBase::vehicleStatusCallback(const VehicleStatus::SharedPtr msg)

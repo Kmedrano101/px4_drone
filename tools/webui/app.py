@@ -29,6 +29,13 @@ from flask import Flask, jsonify, request, render_template
 WORKSPACE = "/home/kevin/drone_ws"
 EXTRA_WS = "/home/kevin/evarobot_ws"
 TOPIC_VERSION_SUFFIX = ""  # firmware v1.14, ver docstring arriba
+# Dominio DDS de TODO lo que lanza la webui. Tiene que ser el mismo que
+# UXRCE_DDS_DOM_ID en el FC (hoy 0): el cliente del FC crea sus topics en ese
+# dominio, y un nodo en otro dominio no ve ni vehicle_status ni la posicion, ni
+# le llegan los setpoints. El 2026-10-19 se puso 10 aqui (para el RViz del
+# escritorio) sin tocar el FC y el ciclo dejo de poder arrancar. Una sola
+# constante para que no vuelva a desalinearse en tres sitios.
+ROS_DOMAIN_ID = 0
 
 # Pruebas que no son un ros2 launch sino un script suelto (hoy: la evaluacion
 # de sensores por MAVLink). Corren con el venv que tiene pymavlink, sin sourcear
@@ -249,7 +256,7 @@ def _start_sysmon(run_id, log_path):
         f"source /opt/ros/jazzy/setup.bash && "
         f"source {EXTRA_WS}/install/setup.bash && "
         f"source {WORKSPACE}/install/setup.bash && "
-        f"export ROS_DOMAIN_ID=10 && "
+        f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID} && "
         f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
         f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
         f"exec /usr/bin/python3 {shlex.quote(SYSMON)} --ros-rates "
@@ -347,7 +354,7 @@ def _start_bag(run_id):
         f"source /opt/ros/jazzy/setup.bash && "
         f"source {EXTRA_WS}/install/setup.bash && "
         f"source {WORKSPACE}/install/setup.bash && "
-        f"export ROS_DOMAIN_ID=10 && "
+        f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID} && "
         f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
         f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
         f"ros2 bag record -a -o {shlex.quote(bag_path)}"
@@ -368,7 +375,7 @@ def _ros_env_prefix():
         f"source /opt/ros/jazzy/setup.bash && "
         f"source {EXTRA_WS}/install/setup.bash && "
         f"source {WORKSPACE}/install/setup.bash && "
-        f"export ROS_DOMAIN_ID=10 && "
+        f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID} && "
         f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
         f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
     )
@@ -439,7 +446,7 @@ def launch():
                 f"source /opt/ros/jazzy/setup.bash && "
                 f"source {EXTRA_WS}/install/setup.bash && "
                 f"source {WORKSPACE}/install/setup.bash && "
-                f"export ROS_DOMAIN_ID=10 && "
+                f"export ROS_DOMAIN_ID={ROS_DOMAIN_ID} && "
                 f"export RMW_IMPLEMENTATION=rmw_cyclonedds_cpp && "
                 f"export CYCLONEDDS_URI=file:///home/kevin/drone_ws/src/px4_drone/config/cyclonedds-pi.xml && "
                 f"{cmd_str}"

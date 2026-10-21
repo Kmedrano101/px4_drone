@@ -342,8 +342,12 @@ def _build_command(test):
     if TOPIC_VERSION_SUFFIX:
         args.append(f"topic_version_suffix:={TOPIC_VERSION_SUFFIX}")
     for p in test["params"]:
-        value = request.json.get(p["key"], p["default"])
-        value = float(value)  # nunca interpolar texto del cliente sin validar
+        value = float(request.json.get(p["key"], p["default"]))  # nunca texto del cliente
+        # Rango obligatorio: sin esto una altura > 1.0 m llegaba al nodo, que la
+        # rechaza con FATAL y aborta el ciclo sin armar (campo del 2026-10-21).
+        if not (p["min"] <= value <= p["max"]):
+            raise ValueError(
+                f"{p['key']} fuera de rango [{p['min']}, {p['max']}] (recibido {value})")
         args.append(f"{p['key']}:={value}")
     if test["needs_confirm_takeoff"]:
         args.append("confirm_takeoff:=true")
@@ -488,8 +492,8 @@ def launch():
 
         try:
             cmd_args = _build_command(test)
-        except (TypeError, ValueError):
-            return jsonify({"error": "Parametro invalido (numerico y dentro del rango permitido)"}), 400
+        except (TypeError, ValueError) as e:
+            return jsonify({"error": f"Parametro invalido: {e}"}), 400
 
         cmd_str = " ".join(shlex.quote(a) for a in cmd_args)
         if "script" in test:

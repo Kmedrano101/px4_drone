@@ -186,7 +186,14 @@ async function launchTest(id) {
   const t = TESTS[id];
   const params = {};
   for (const p of t.params) {
-    params[p.key] = parseFloat(document.getElementById(`${id}-${p.key}`).value);
+    {
+      const el = document.getElementById(`${id}-${p.key}`);
+      let v = parseFloat(el.value);
+      const lo = parseFloat(el.min), hi = parseFloat(el.max);
+      if (!Number.isNaN(lo)) v = Math.max(lo, v);   // el nodo rechaza fuera de rango
+      if (!Number.isNaN(hi)) v = Math.min(hi, v);
+      params[p.key] = v;
+    }
   }
   if (t.needs_confirm_takeoff) {
     params.confirm_takeoff = document.getElementById(`${id}-confirm`).checked;
